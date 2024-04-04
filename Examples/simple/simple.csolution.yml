@@ -1,0 +1,40 @@
+solution:
+  compiler: AC6@6.22.0
+
+  language-C: c11
+  language-CPP: c++17
+  cdefault: 
+
+  projects:
+    - project: ./simple.cproject.yml
+
+
+  target-types:
+    - type: AVH_Corstone-300
+      device: ARM::SSE-300-MPS3
+      board: ARM::V2M-MPS3-SSE-300-FVP
+      variables:
+        - Board-Layer: ../../BuildConfig/layers/board/AVH_Corstone-300/Board.clayer.yml
+        - AC6-Link-Script: ../../BuildConfig/linker_scripts/ac6_sse300_mps3_s.sct
+        - GCC-Link-Script: ../../BuildConfig/linker_scripts/gcc_sse300_mps3.ld
+        - CLANG-Link-Script: ../../BuildConfig/linker_scripts/clang_sse300_mps3.sct
+        - Regions: ../../BuildConfig/linker_scripts/SSE-300-MPS3/region_defs.h
+
+    - type: MPS3_Corstone-300
+      device: ARM::SSE-300-MPS3
+      board: ARM::V2M-MPS3-SSE-300-FVP
+      variables:
+        - Board-Layer: ../../BuildConfig/layers/board/MPS3_Corstone-300/Board.clayer.yml
+        - AC6-Link-Script: ../../BuildConfig/linker_scripts/ac6_sse300_mps3_s.sct
+        - GCC-Link-Script: ../../BuildConfig/linker_scripts/gcc_sse300_mps3.ld
+        - CLANG-Link-Script: ../../BuildConfig/linker_scripts/clang_sse300_mps3.sct
+        - Regions: ../../BuildConfig/linker_scripts/SSE-300-MPS3/region_defs.h
+
+  
+
+  build-types:
+    - type: Release
+      debug: on
+
+
+  

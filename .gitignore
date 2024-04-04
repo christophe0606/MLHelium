@@ -1,0 +1,13 @@
+out/
+tmp/
+__pycache__/
+RTE/_*
+/*.index.txt
+*.cprj
+/*.sds
+/*.cbuild*.yml
+**.DS_Store
+RTE/
+*.cbuild*.yml
+cprj/
+

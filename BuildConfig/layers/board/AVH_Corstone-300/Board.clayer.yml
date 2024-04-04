@@ -1,0 +1,51 @@
+layer:
+  type: Board
+  # name: AVH_MPS3_Cortsone-300
+  # variant: IoT-VSocket-Ethernet
+  description: Board setup for AVH
+  for-board: ARM::V2M-MPS3-SSE-300-FVP
+  processor:
+    endian: little
+    trustzone: secure
+
+  packs:
+    - pack: ARM::CMSIS@6.0.0
+    - pack: ARM::CMSIS-DSP@1.15.0
+    - pack: ARM::V2M_MPS3_SSE_300_BSP@1.4.0
+    - pack: ARM::CMSIS-Compiler@2.0.0
+    - pack: ARM::Cortex_DFP@1.0.0
+
+  define:
+    - CMSIS_board_header: "\"AVH_Corstone_300.h\""
+
+  misc:
+    - for-compiler: GCC
+      Link:
+            - --specs=rdimon.specs
+      Library:
+            - -lrdimon
+    - for-compiler: CLANG
+      Link:
+            - -lcrt0-semihost
+            - -lsemihost
+
+  components:
+    - component: ARM::CMSIS:CORE
+    - component: ARM::CMSIS:DSP@1.15.0
+    - component: ARM::Device:Startup&C Startup
+    - component: ARM::Device:Definition
+    
+    - component: ARM::Device:Native Driver:SysCounter
+    - component: ARM::Device:Native Driver:SysTimer
+    - component: ARM::Device:Native Driver:Timeout
+
+
+  groups:
+    - group: Board
+      files:
+        - file: ./AVH_MPS3_Corstone_300.h
+        - file: ./main.h
+        - file: ./main.c
+
+  
+      

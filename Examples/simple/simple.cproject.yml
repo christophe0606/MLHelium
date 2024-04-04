@@ -1,0 +1,24 @@
+project:
+  
+  groups:
+    - group: App
+      files:
+        - file: demo.cpp
+   
+  add-path:
+      - ./
+
+  layers:
+    - layer: $Board-Layer$
+      type: Board
+
+  linker:
+    - script: $AC6-Link-Script$
+      for-compiler: AC6
+    - script: $GCC-Link-Script$
+      for-compiler: GCC
+    - script: $CLANG-Link-Script$
+      for-compiler: CLANG
+    - regions: $Regions$
+     
+  
