@@ -10,4 +10,8 @@ RTE/_*
 RTE/
 *.cbuild*.yml
 cprj/
+*.bin 
+*.dat
+*.pt
+
 

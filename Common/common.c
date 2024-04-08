@@ -59,8 +59,6 @@ float16_t* get_f16_tensor(const unsigned char *network,
 }
 #endif 
 
-#include <stdio.h>
-
 /**
  * @brief      Convenience function to copy a tensor to internal memory
  *

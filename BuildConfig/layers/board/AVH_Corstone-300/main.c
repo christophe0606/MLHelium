@@ -48,4 +48,5 @@ int main (void) {
 
   demo();                     // Initialize application
 
+  return(0);
 }
