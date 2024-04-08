@@ -4,9 +4,12 @@ project:
     - group: App
       files:
         - file: demo.cpp
+        - file: network.c
+        - file: ../../Common/common.c
    
   add-path:
       - ./
+      - ../../Common
 
   layers:
     - layer: $Board-Layer$
