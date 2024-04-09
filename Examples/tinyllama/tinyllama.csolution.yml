@@ -24,6 +24,8 @@ solution:
     - type: MPS3_Corstone-300
       device: ARM::SSE-300-MPS3
       board: ARM::V2M-MPS3-SSE-300-FVP
+      define:
+        - MPS3
       variables:
         - Board-Layer: ../../BuildConfig/layers/board/MPS3_Corstone-300/Board.clayer.yml
         - ML-Layer: ../../Kernels/Kernel.clayer.yml

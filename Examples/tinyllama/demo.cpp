@@ -15,6 +15,10 @@
 #include "RTE_Components.h"
 #include  CMSIS_device_header
 
+#if defined(MPS3)
+#include "stdout_USART.h"
+#endif
+
 #include <iostream>
 #include "common.h"
 #include "error.h"
@@ -547,7 +551,14 @@ void safe_printf(char *piece) {
             return; // bad byte, don't print it
         }
     }
-    printf("%s", piece);
+    if ((piece[0]=='\n') && (piece[1]=='\0'))
+    {
+       printf("\r\n");
+    }
+    else 
+    {
+       printf("%s", piece);
+    }
 }
 
 int str_lookup(const char *str, TokenIndex *sorted_vocab, int vocab_size) {
@@ -1105,7 +1116,7 @@ void checkDTCMTime()
     testMemAccess(&mem);
     testMemAccess(&mem);
     long b = time_in_cycles();
-    printf("  Test time %ld\r\n",(a-b)/5);
+    printf("  Measured cycles %ld\r\n",(a-b)/5);
 }
 
 void checkExtMemTime(const void *ptr)
@@ -1118,7 +1129,7 @@ void checkExtMemTime(const void *ptr)
     testMemAccess(ptr);
     testMemAccess(ptr);
     long b = time_in_cycles();
-    printf("  Test time %ld\r\n",(a-b)/5);
+    printf("  Measured cycles %ld\r\n",(a-b)/5);
 }
 
 void checkITCMTime()
@@ -1131,7 +1142,7 @@ void checkITCMTime()
     testITCM();
     testITCM();
     long b = time_in_cycles();
-    printf("  Test time %ld\r\n",(a-b)/5);
+    printf("  Measured cycles %ld\r\n",(a-b)/5);
 }
 
 void demo() {
@@ -1143,10 +1154,6 @@ void demo() {
 
     SCB_EnableICache();
     SCB_EnableDCache();
-
-    #if defined(MPS3)
-    printf("\r\nStart new test\r\n");
-    #endif
 
     const unsigned char *network_mem;
     const unsigned char *tokenizer_mem;
