@@ -40,6 +40,14 @@
 
 #define KV_DIM ((DIM * N_KV_HEADS) / N_HEADS)
 
+/*
+
+Internal memory for some part of the transformer state
+
+*/
+#define NB_INT_MEM ((N_HEADS * MAX_SEQ_LEN + VOCAB_SIZE + 4*DIM+2*HIDDEN_DIM)*sizeof(float16_t))
+static unsigned char* internal_mem[NB_INT_MEM];
+static memory_area_t internal ;
 
 extern "C" {
     extern void demo();
@@ -63,6 +71,24 @@ void * ml_malloc( size_t bytes )
 {
     mem_usage += bytes;
     return(malloc(bytes));
+}
+
+void * ml_aligned_calloc( size_t elementCount, size_t elementSize )
+{
+    size_t allocated_memory;
+    void* res = aligned_malloc(8, elementCount*elementSize,&allocated_memory);
+
+    mem_usage += allocated_memory;
+    return(res);
+}
+
+void * ml_aligned_malloc( size_t bytes )
+{
+    size_t allocated_memory;
+    void* res = aligned_malloc(8, bytes,&allocated_memory);
+
+    mem_usage += allocated_memory;
+    return(res);
 }
 
 // ----------------------------------------------------------------------------
@@ -118,16 +144,32 @@ template<typename T>
 int malloc_run_state(RunState<T>* s) {
     // we ml_calloc instead of malloc to keep valgrind happy
 
-    s->x = (T*)ml_calloc(DIM, sizeof(T));
-    s->xb = (T*)ml_calloc(DIM, sizeof(T));
-    s->xb2 = (T*)ml_calloc(DIM, sizeof(T));
-    s->hb = (T*)ml_calloc(HIDDEN_DIM, sizeof(T));
-    s->hb2 = (T*)ml_calloc(HIDDEN_DIM, sizeof(T));
-    s->q = (T*)ml_calloc(DIM, sizeof(T));
-    s->key_cache = (T*)ml_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(T));
-    s->value_cache = (T*)ml_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(T));
-    s->att = (T*)ml_calloc(N_HEADS * MAX_SEQ_LEN, sizeof(T));
-    s->logits = (T*)ml_calloc(VOCAB_SIZE, sizeof(T));
+    //s->x = (T*)ml_aligned_calloc(DIM, sizeof(T));
+    //s->xb = (T*)ml_aligned_calloc(DIM, sizeof(T));
+    //s->xb2 = (T*)ml_aligned_calloc(DIM, sizeof(T));
+    
+    s->x = (T*)add_aligned_buffer_to_area(&internal,DIM*sizeof(T),8);
+    s->xb = (T*)add_aligned_buffer_to_area(&internal,DIM*sizeof(T),8);
+    s->xb2 = (T*)add_aligned_buffer_to_area(&internal,DIM*sizeof(T),8);
+
+    //s->hb = (T*)ml_aligned_calloc(HIDDEN_DIM, sizeof(T));
+    //s->hb2 = (T*)ml_aligned_calloc(HIDDEN_DIM, sizeof(T));
+    
+    s->hb = (T*)add_aligned_buffer_to_area(&internal,HIDDEN_DIM*sizeof(T),8);
+    s->hb2 = (T*)add_aligned_buffer_to_area(&internal,HIDDEN_DIM*sizeof(T),8);
+
+    //s->q = (T*)ml_aligned_calloc(DIM, sizeof(T));
+    s->q = (T*)add_aligned_buffer_to_area(&internal,DIM*sizeof(T),8);
+
+    s->key_cache = (T*)ml_aligned_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(T));
+    s->value_cache = (T*)ml_aligned_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(T));
+    
+    //s->att = (T*)ml_aligned_calloc(N_HEADS * MAX_SEQ_LEN, sizeof(T));
+    s->att = (T*)add_aligned_buffer_to_area(&internal,N_HEADS * MAX_SEQ_LEN*sizeof(T),8);
+
+    //s->logits = (T*)ml_aligned_calloc(VOCAB_SIZE, sizeof(T));
+    s->logits = (T*)add_aligned_buffer_to_area(&internal,VOCAB_SIZE*sizeof(T),8);
+
     // ensure all mallocs went fine
     if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q
      || !s->key_cache || !s->value_cache || !s->att || !s->logits) {
@@ -142,16 +184,16 @@ void free_run_state(RunState<T>* s) {
     {
         return;
     }
-    SAFE_FREE(s->x);
-    SAFE_FREE(s->xb);
-    SAFE_FREE(s->xb2);
-    SAFE_FREE(s->hb);
-    SAFE_FREE(s->hb2);
-    SAFE_FREE(s->q);
-    SAFE_FREE(s->att);
-    SAFE_FREE(s->logits);
-    SAFE_FREE(s->key_cache);
-    SAFE_FREE(s->value_cache);
+    //aligned_free(s->x);
+    //aligned_free(s->xb);
+    //aligned_free(s->xb2);
+    //aligned_free(s->hb);
+    //aligned_free(s->hb2);
+    //aligned_free(s->q);
+    //aligned_free(s->att);
+    //aligned_free(s->logits);
+    aligned_free(s->key_cache);
+    aligned_free(s->value_cache);
 }
 
 template<typename T>
@@ -1202,12 +1244,15 @@ void demo() {
         return;
     }
 
+    init_memory_area(&internal,(unsigned char*)internal_mem,NB_INT_MEM);
+
     printf("\r\nBuild transformer\r\n");
 
     // build the Transformer via the model .bin file
     Transformer<float16_t> transformer;
 
     uint32_t mem_stat = mem_usage;
+    uint32_t int_mem_stat = internal.current_bytes;
 
     error = build_transformer(&transformer, network_mem);
     if (error != kNoError)
@@ -1216,7 +1261,8 @@ void demo() {
     }
     if (steps == 0 || steps > MAX_SEQ_LEN) steps = MAX_SEQ_LEN; // override to ~max length
 
-    printf("  Allocated transformer memory %u bytes (0x%X) \r\n",mem_usage-mem_stat,mem_usage-mem_stat);
+    printf("  Heap allocated transformer memory %u bytes (0x%X) \r\n",mem_usage-mem_stat,mem_usage-mem_stat);
+    printf("  Internal allocated transformer memory %u bytes (0x%X) \r\n",internal.current_bytes-int_mem_stat,internal.current_bytes-int_mem_stat);
 
 
     printf("\r\nBuild tokenizer\r\n");
@@ -1224,32 +1270,37 @@ void demo() {
     Tokenizer tokenizer;
 
     mem_stat = mem_usage;
+    int_mem_stat = internal.current_bytes;
     error = build_tokenizer(&tokenizer, tokenizer_mem, VOCAB_SIZE);
     if (error != kNoError)
     {
         goto error;
     }
 
-    printf("  Allocated tokenizer memory %u bytes (0x%X) \r\n",mem_usage-mem_stat,mem_usage-mem_stat);
+    printf("  Heap allocated tokenizer memory %u bytes (0x%X) \r\n",mem_usage-mem_stat,mem_usage-mem_stat);
+    printf("  Internal allocated tokenizer memory %u bytes (0x%X) \r\n",internal.current_bytes-int_mem_stat,internal.current_bytes-int_mem_stat);
 
 
     // build the Sampler
     printf("\r\nBuild sampler\r\n");
     mem_stat = mem_usage;
+    int_mem_stat = internal.current_bytes;
     Sampler sampler;
     error = build_sampler(&sampler, VOCAB_SIZE, temperature, topp, rng_seed);
     if (error != kNoError)
     {
         goto error;
     }
-    printf("  Allocated sampler memory %u bytes (0x%X) \r\n",mem_usage-mem_stat,mem_usage-mem_stat);
+    printf("  Heap allocated sampler memory %u bytes (0x%X) \r\n",mem_usage-mem_stat,mem_usage-mem_stat);
+    printf("  Internal allocated sampler memory %u bytes (0x%X) \r\n",internal.current_bytes-int_mem_stat,internal.current_bytes-int_mem_stat);
 
     INIT_SYSTICK;
 
     checkDTCMTime();
     checkITCMTime();
 
-    printf("\r\nTotal allocated runtime memory %u bytes (0x%X) \r\n",mem_usage,mem_usage);
+    printf("\r\nTotal Heap allocated runtime memory %u bytes (0x%X) \r\n",mem_usage,mem_usage);
+    printf("  Total Internal allocated memory %u bytes (0x%X) \r\n",internal.current_bytes,internal.current_bytes);
 
     printf("\r\nRun\r\n\r\n");
 

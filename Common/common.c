@@ -108,3 +108,103 @@ void sub_copy_tensor(unsigned char *dst,
    const unsigned char * src = (const unsigned char *)(network+offset);
    memcpy(dst,src+start_index,stop_index - start_index);
 }
+
+/**
+ * @brief      Memory allocation with alignment
+ *
+ * @param[in]  alignment         The alignment in bytes
+ * @param[in]  size              The size in bytes
+ * @param      allocated_memory  The amount of reserved bytes (may be a bit bigger then size)
+ *
+ * @return     Pointer to the allocated buffer
+ */
+void* aligned_malloc(size_t alignment, size_t size,size_t *allocated_memory)
+{
+   void *ptr=malloc(size+alignment+sizeof(void*));
+   *allocated_memory = size+alignment+sizeof(void*);
+   void *aligned = (char*)(((size_t)(ptr)+sizeof(void*)+alignment) & ~(alignment-1));
+
+   *((void**)(aligned) - 1) = ptr;
+   return(aligned);
+}
+
+/**
+ * @brief      Free a buffer allocated with the aligned malloc
+ *
+ * @param      ptr   The pointer
+ */
+void aligned_free(void* ptr)
+{
+    if (ptr) {
+        free(*((void**)(ptr) - 1));
+    }
+};
+
+/**
+ * @brief      Free the memory area
+ *
+ * @param      area  The memory area
+ */
+void free_area(memory_area_t * area)
+{
+   if (area)
+   {
+      area->current_bytes = 0;
+   }
+}
+
+/**
+ * @brief      Adds an aligned buffer to area.
+ *
+ * @param      area       The memory area
+ * @param[in]  bytes      The number of bytes to allocate
+ * @param[in]  alignment  The alignment
+ *
+ * @return     Pointer to the reserved an aligned buffer
+ */
+void* add_aligned_buffer_to_area(memory_area_t * area,size_t bytes,size_t alignment)
+{
+   if (area)
+   {
+      unsigned char *ptr=area->memory+area->current_bytes;
+
+      if ((size_t)ptr & alignment)
+      {
+          size_t delta = alignment - ((size_t)ptr & alignment);
+          ptr = (unsigned char*)((size_t)ptr + delta);
+          if ((area->current_bytes + bytes + delta)>area->maximum_bytes)
+          {
+             return(NULL);
+          }
+          area->current_bytes += bytes + delta;
+          return((void*)ptr);
+      }
+      else 
+      {
+        if ((area->current_bytes + bytes)>area->maximum_bytes)
+        {
+             return(NULL);
+        }
+        area->current_bytes += bytes;
+        return((void*)ptr);
+      }
+   }
+   return(NULL);
+}
+
+/**
+ * @brief      Initializes a memory area from an internal memory buffer
+ *
+ * @param      area      The memory area
+ * @param      buffer    The internal buffer
+ * @param[in]  nb_bytes  The length in bytes of the internal buffer
+ */
+void init_memory_area(memory_area_t *area,unsigned char * buffer,size_t nb_bytes)
+{
+    if (area)
+    {
+       area->memory = buffer;
+       area->maximum_bytes = nb_bytes;
+       area->current_bytes = 0;
+    }
+}
