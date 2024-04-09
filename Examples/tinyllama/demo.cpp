@@ -5,6 +5,7 @@
 
 #include <iostream>
 #include "common.h"
+#include "error.h"
 #include <cstdio>
 
 #include <cstdio>
@@ -42,6 +43,26 @@
 
 extern "C" {
     extern void demo();
+}
+
+#define SAFE_FREE(x)\
+  if ((x))          \
+  {                 \
+     free((x));     \
+  }
+
+static uint32_t mem_usage = 0;
+
+void * ml_calloc( size_t elementCount, size_t elementSize )
+{
+    mem_usage += elementCount * elementSize;
+    return(calloc(elementCount,elementSize));
+}
+
+void * ml_malloc( size_t bytes )
+{
+    mem_usage += bytes;
+    return(malloc(bytes));
 }
 
 // ----------------------------------------------------------------------------
@@ -94,42 +115,43 @@ struct Transformer {
 } ;
 
 template<typename T>
-void malloc_run_state(RunState<T>* s) {
-    // we calloc instead of malloc to keep valgrind happy
+int malloc_run_state(RunState<T>* s) {
+    // we ml_calloc instead of malloc to keep valgrind happy
 
-    s->x = (T*)calloc(DIM, sizeof(T));
-    s->xb = (T*)calloc(DIM, sizeof(T));
-    s->xb2 = (T*)calloc(DIM, sizeof(T));
-    s->hb = (T*)calloc(HIDDEN_DIM, sizeof(T));
-    s->hb2 = (T*)calloc(HIDDEN_DIM, sizeof(T));
-    s->q = (T*)calloc(DIM, sizeof(T));
-    s->key_cache = (T*)calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(T));
-    s->value_cache = (T*)calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(T));
-    s->att = (T*)calloc(N_HEADS * MAX_SEQ_LEN, sizeof(T));
-    s->logits = (T*)calloc(VOCAB_SIZE, sizeof(T));
+    s->x = (T*)ml_calloc(DIM, sizeof(T));
+    s->xb = (T*)ml_calloc(DIM, sizeof(T));
+    s->xb2 = (T*)ml_calloc(DIM, sizeof(T));
+    s->hb = (T*)ml_calloc(HIDDEN_DIM, sizeof(T));
+    s->hb2 = (T*)ml_calloc(HIDDEN_DIM, sizeof(T));
+    s->q = (T*)ml_calloc(DIM, sizeof(T));
+    s->key_cache = (T*)ml_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(T));
+    s->value_cache = (T*)ml_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(T));
+    s->att = (T*)ml_calloc(N_HEADS * MAX_SEQ_LEN, sizeof(T));
+    s->logits = (T*)ml_calloc(VOCAB_SIZE, sizeof(T));
     // ensure all mallocs went fine
     if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q
      || !s->key_cache || !s->value_cache || !s->att || !s->logits) {
-        fprintf(stdout, "run state alloc error!\n");
-        #if defined(MPS3)
-           while(1);
-        #endif
-        exit(EXIT_FAILURE);
+        return(kErrorAllocRunState);
     }
+    return(kNoError);
 }
 
 template<typename T>
 void free_run_state(RunState<T>* s) {
-    free(s->x);
-    free(s->xb);
-    free(s->xb2);
-    free(s->hb);
-    free(s->hb2);
-    free(s->q);
-    free(s->att);
-    free(s->logits);
-    free(s->key_cache);
-    free(s->value_cache);
+    if (!s)
+    {
+        return;
+    }
+    SAFE_FREE(s->x);
+    SAFE_FREE(s->xb);
+    SAFE_FREE(s->xb2);
+    SAFE_FREE(s->hb);
+    SAFE_FREE(s->hb2);
+    SAFE_FREE(s->q);
+    SAFE_FREE(s->att);
+    SAFE_FREE(s->logits);
+    SAFE_FREE(s->key_cache);
+    SAFE_FREE(s->value_cache);
 }
 
 template<typename T>
@@ -180,26 +202,28 @@ void memory_map_weights(TransformerWeights<T> *w, const unsigned char* ptr) {
 }
 
 template<typename T>
-void read_checkpoint(const unsigned char* memory, TransformerWeights<T>* weights) {
+int read_checkpoint(const unsigned char* memory, TransformerWeights<T>* weights) {
     //FILE *file = fopen(checkpoint, "rb");
     if (!memory) { 
-        fprintf(stdout, "No memory for checkpoint\n"); 
-        #if defined(MPS3)
-           while(1);
-        #endif
-        exit(EXIT_FAILURE); 
+        return(kNoMemoryBufferForCheckpoint); 
     }
     
 
     memory_map_weights<T>(weights, memory);
+    return(kNoError);
 }
 
 template<typename T>
-void build_transformer(Transformer<T> *t, const unsigned char* memory) {
+int build_transformer(Transformer<T> *t, const unsigned char* memory) {
     // read in the Config and the Weights from the checkpoint
-    read_checkpoint<T>(memory, &t->weights);
+    int err = read_checkpoint<T>(memory, &t->weights);
+    if (err!=kNoError)
+    {
+        return(err);
+    }
     // allocate the RunState buffers
-    malloc_run_state<T>(&t->state);
+    err = malloc_run_state<T>(&t->state);
+    return(err);
 }
 
 template<typename T>
@@ -466,19 +490,15 @@ T interpret(const unsigned char* p)
 
     return(*reinterpret_cast<const T*>(&v));
 }
-void build_tokenizer(Tokenizer* t, const unsigned char* memory, int vocab_size) {
+int build_tokenizer(Tokenizer* t, const unsigned char* memory, int vocab_size) {
     // i should have written the vocab_size into the tokenizer file... sigh
     t->vocab_size = vocab_size;
     // malloc space to hold the scores and the strings
-    t->vocab = (char**)malloc(vocab_size * sizeof(char*));
-    t->vocab_scores = (float*)malloc(vocab_size * sizeof(float));
+    t->vocab = (char**)ml_malloc(vocab_size * sizeof(char*));
+    t->vocab_scores = (float*)ml_malloc(vocab_size * sizeof(float));
     if (!t->vocab || !t->vocab_scores)
     {
-        fprintf(stdout, "build tokenizer malloc failed!\n");
-        #if defined(MPS3)
-           while(1);
-        #endif
-        exit(EXIT_FAILURE);
+        return(kErrorBuildTokenizer);
     }
     t->sorted_vocab = NULL; // initialized lazily
     for (int i = 0; i < 256; i++) {
@@ -487,11 +507,7 @@ void build_tokenizer(Tokenizer* t, const unsigned char* memory, int vocab_size) 
     }
     // read in the file
     if (!memory) { 
-        fprintf(stdout, "no memory for tokenizer\n"); 
-        #if defined(MPS3)
-           while(1);
-        #endif
-        exit(EXIT_FAILURE); 
+        return(kNoMemoryBufferForCheckpoint); 
     }
     t->max_token_length = interpret<int>(memory);
     memory += 4;
@@ -507,27 +523,28 @@ void build_tokenizer(Tokenizer* t, const unsigned char* memory, int vocab_size) 
         // buffer
         memory += 4;
 
-        t->vocab[i] = (char *)malloc(len + 1);
+        t->vocab[i] = (char *)ml_malloc(len + 1);
         if (!t->vocab[i])
         {
-            fprintf(stdout, "malloc failed for vocab %d!\n",i);
-            #if defined(MPS3)
-               while(1);
-            #endif
-            exit(EXIT_FAILURE);
+            return(kErrorBuildTokenizer);
         }
         memcpy(t->vocab[i],memory,len);
         memory += len;
 
         t->vocab[i][len] = '\0'; // add the string terminating token
     }
+    return(kNoError);
 }
 
 void free_tokenizer(Tokenizer* t) {
-    for (int i = 0; i < t->vocab_size; i++) { free(t->vocab[i]); }
-    free(t->vocab);
-    free(t->vocab_scores);
-    free(t->sorted_vocab);
+    if (!t)
+    {
+        return;
+    }
+    for (int i = 0; i < t->vocab_size; i++) { SAFE_FREE(t->vocab[i]); }
+    SAFE_FREE(t->vocab);
+    SAFE_FREE(t->vocab_scores);
+    SAFE_FREE(t->sorted_vocab);
 }
 
 char* decode(Tokenizer* t, int prev_token, int token) {
@@ -564,27 +581,19 @@ int str_lookup(const char *str, TokenIndex *sorted_vocab, int vocab_size) {
     return res != NULL ? res->id : -1;
 }
 
-void encode(Tokenizer* t, const char *text, int8_t bos, int8_t eos, int *tokens, int *n_tokens) {
+int encode(Tokenizer* t, const char *text, int8_t bos, int8_t eos, int *tokens, int *n_tokens) {
     // encode the string text (input) into an upper-bound preallocated tokens[] array
     // bos != 0 means prepend the BOS token (=1), eos != 0 means append the EOS token (=2)
     if (text == NULL) { 
-        fprintf(stdout, "cannot encode NULL text\n"); 
-        #if defined(MPS3)
-           while(1);
-        #endif
-        exit(EXIT_FAILURE); 
+        return(kCannotEncodeNullText); 
     }
 
     if (t->sorted_vocab == NULL) {
         // lazily malloc and sort the vocabulary
-        t->sorted_vocab = (TokenIndex*)malloc(t->vocab_size * sizeof(TokenIndex));
+        t->sorted_vocab = (TokenIndex*)ml_malloc(t->vocab_size * sizeof(TokenIndex));
         if (!t->sorted_vocab) 
         { 
-            fprintf(stdout, "sorted vocab alloc error\n"); 
-            #if defined(MPS3)
-               while(1);
-            #endif
-            exit(EXIT_FAILURE); 
+            return(kEncodeError); 
         }
         for (int i = 0; i < t->vocab_size; i++) {
             t->sorted_vocab[i].str = t->vocab[i];
@@ -595,14 +604,10 @@ void encode(Tokenizer* t, const char *text, int8_t bos, int8_t eos, int *tokens,
 
     // create a temporary buffer that will store merge candidates of always two consecutive tokens
     // *2 for concat, +1 for null terminator +2 for UTF8 (in case max_token_length is 1)
-    char* str_buffer = (char*)malloc((t->max_token_length*2 +1 +2) * sizeof(char));
+    char* str_buffer = (char*)ml_malloc((t->max_token_length*2 +1 +2) * sizeof(char));
     if (!str_buffer) 
     { 
-            fprintf(stdout, "str buffer alloc error\n"); 
-            #if defined(MPS3)
-               while(1);
-            #endif
-            exit(EXIT_FAILURE); 
+            return(kEncodeError); 
     }
 
     size_t str_len = 0;
@@ -705,7 +710,9 @@ void encode(Tokenizer* t, const char *text, int8_t bos, int8_t eos, int *tokens,
     // add optional EOS (=2) token, if desired
     if (eos) tokens[(*n_tokens)++] = 2;
 
-    free(str_buffer);
+    SAFE_FREE(str_buffer);
+
+    return(kNoError);
 }
 
 // ----------------------------------------------------------------------------
@@ -805,25 +812,26 @@ int sample_topp(T* probabilities, int n, float topp, ProbIndex* probindex, float
     return probindex[last_idx].index; // in case of rounding errors
 }
 
-void build_sampler(Sampler* sampler, int vocab_size, float temperature, float topp, unsigned long long rng_seed) {
+int build_sampler(Sampler* sampler, int vocab_size, float temperature, float topp, unsigned long long rng_seed) {
     sampler->vocab_size = vocab_size;
     sampler->temperature = temperature;
     sampler->topp = topp;
     sampler->rng_state = rng_seed;
     // buffer only used with nucleus sampling; may not need but it's ~small
-    sampler->probindex = (ProbIndex*)malloc(sampler->vocab_size * sizeof(ProbIndex));
+    sampler->probindex = (ProbIndex*)ml_malloc(sampler->vocab_size * sizeof(ProbIndex));
     if (!sampler->probindex) 
     { 
-        fprintf(stdout, "sampler alloc error\n"); 
-        #if defined(MPS3)
-           while(1);
-        #endif
-        exit(EXIT_FAILURE); 
+        return(kBuildSamplerError); 
     }
+    return(kNoError);
 }
 
 void free_sampler(Sampler* sampler) {
-    free(sampler->probindex);
+    if (!sampler)
+    {
+        return;
+    }
+    SAFE_FREE(sampler->probindex);
 }
 
 unsigned int random_u32(unsigned long long *state) {
@@ -879,43 +887,45 @@ int sample(Sampler* sampler, T* logits) {
 
 extern "C" uint32_t SystemCoreClock;
 
-long time_in_ms() {
+float time_in_ms() {
     
 
-    return(1000*SysTick->VAL/SystemCoreClock);
+    return(1000.0*SysTick->VAL/SystemCoreClock);
+}
+
+long time_in_cycles() {
+    
+
+    return(SysTick->VAL);
 }
 
 // ----------------------------------------------------------------------------
 // generation loop
 
 template<typename T>
-void generate(Transformer<T> *transformer, Tokenizer *tokenizer, Sampler *sampler, const char *prompt, int steps) {
+int generate(Transformer<T> *transformer, Tokenizer *tokenizer, Sampler *sampler, const char *prompt, int steps) {
     const char *empty_prompt = "";
     if (prompt == NULL) { prompt = empty_prompt; }
 
     // encode the (string) prompt into tokens sequence
     int num_prompt_tokens = 0;
-    int* prompt_tokens = (int*)malloc((strlen(prompt)+3) * sizeof(int)); // +3 for '\0', ?BOS, ?EOS
+    int* prompt_tokens = (int*)ml_malloc((strlen(prompt)+3) * sizeof(int)); // +3 for '\0', ?BOS, ?EOS
     if (!prompt_tokens) 
     { 
-        fprintf(stdout, "prompt token alloc error\n"); 
-        #if defined(MPS3)
-           while(1);
-        #endif
-        exit(EXIT_FAILURE); 
+        return(kGenerateError); 
     }
 
-    encode(tokenizer, prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
+    int err = encode(tokenizer, prompt, 1, 0, prompt_tokens, &num_prompt_tokens);
+    if (err != kNoError)
+    {
+        return(err);
+    }
     if (num_prompt_tokens < 1) {
-        fprintf(stdout, "something is wrong, expected at least 1 prompt token\n");
-        #if defined(MPS3)
-           while(1);
-        #endif
-        exit(EXIT_FAILURE);
+        return(kGenerateError);
     }
 
     // start the main loop
-    long start = 0;  // used to time our code, only initialized after first iteration
+    float start = 0;  // used to time our code, only initialized after first iteration
     int next;        // will store the next token in the sequence
     int token = prompt_tokens[0]; // kick off with the first token in the prompt
     int pos = 0;     // position in the sequence
@@ -953,11 +963,12 @@ void generate(Transformer<T> *transformer, Tokenizer *tokenizer, Sampler *sample
 
     // report achieved tok/s (pos-1 because the timer starts after first iteration)
     if (pos > 1) {
-        long end = time_in_ms();
+        float end = time_in_ms();
         fprintf(stderr, "achieved tok/s: %f\n", (pos-1) / (double)(end-start)*1000);
     }
 
-    free(prompt_tokens);
+    SAFE_FREE(prompt_tokens);
+    return(kNoError);
 }
 
 
@@ -979,7 +990,7 @@ const unsigned char* load_mem(const char* checkpoint,const unsigned char* refbuf
     end = fin.tellg();
     fin.seekg (0, std::ios::beg);
 
-    printf("%s : %lld bytes,(%llX)\r\n",checkpoint,end-begin,end-begin);
+    printf("%s : %lld bytes (%llX)\r\n",checkpoint,end-begin,end-begin);
     const unsigned char *buf;
     if (refbuf!=nullptr)
     {
@@ -987,7 +998,7 @@ const unsigned char* load_mem(const char* checkpoint,const unsigned char* refbuf
     }
     else
     {
-       buf =  (const unsigned char*)malloc(end-begin);
+       buf =  (const unsigned char*)ml_malloc(end-begin);
     }
     if (buf == nullptr)
     {
@@ -999,12 +1010,158 @@ const unsigned char* load_mem(const char* checkpoint,const unsigned char* refbuf
     return(buf);
 }
 
+__STATIC_INLINE void testITCM()
+{
+    __asm volatile (                                           
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        "  NOP                                         \n"
+        :                      
+        :                                  
+        :);
+}
+
+__STATIC_INLINE void testDTCM(void *ptr)
+{
+    __asm volatile (
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        "  LDR r5,[%[src]] \n"
+        :[src] "+r"(ptr)                  
+        :
+        :"r5");
+}
+
+void checkDTCMTime()
+{
+    printf("\r\nCheck DTCM time measurement (should be close to 50 cycles)\r\n");
+    long mem;
+    long a = time_in_cycles();
+    testDTCM(&mem);
+    testDTCM(&mem);
+    testDTCM(&mem);
+    testDTCM(&mem);
+    testDTCM(&mem);
+    long b = time_in_cycles();
+    printf("  Test time %ld\r\n",(a-b)/5);
+}
+
+void checkITCMTime()
+{
+    printf("\r\nCheck ITCM time measurement (should be close to 50 cycles)\r\n");
+    long a = time_in_cycles();
+    testITCM();
+    testITCM();
+    testITCM();
+    testITCM();
+    testITCM();
+    long b = time_in_cycles();
+    printf("  Test time %ld\r\n",(a-b)/5);
+}
 
 void demo() {
 
+    int error = 0;
     #if defined(MPS3)
     stdout_init();
     #endif
+
+    SCB_EnableICache();
+    SCB_EnableDCache();
 
     #if defined(MPS3)
     printf("\r\nStart new test\r\n");
@@ -1050,38 +1207,68 @@ void demo() {
     // build the Transformer via the model .bin file
     Transformer<float16_t> transformer;
 
-    build_transformer(&transformer, network_mem);
+    uint32_t mem_stat = mem_usage;
+
+    error = build_transformer(&transformer, network_mem);
+    if (error != kNoError)
+    {
+        goto error;
+    }
     if (steps == 0 || steps > MAX_SEQ_LEN) steps = MAX_SEQ_LEN; // override to ~max length
+
+    printf("  Allocated transformer memory %u bytes (0x%X) \r\n",mem_usage-mem_stat,mem_usage-mem_stat);
 
 
     printf("\r\nBuild tokenizer\r\n");
     // build the Tokenizer via the tokenizer .bin file
     Tokenizer tokenizer;
 
-    build_tokenizer(&tokenizer, tokenizer_mem, VOCAB_SIZE);
+    mem_stat = mem_usage;
+    error = build_tokenizer(&tokenizer, tokenizer_mem, VOCAB_SIZE);
+    if (error != kNoError)
+    {
+        goto error;
+    }
+
+    printf("  Allocated tokenizer memory %u bytes (0x%X) \r\n",mem_usage-mem_stat,mem_usage-mem_stat);
+
 
     // build the Sampler
+    printf("\r\nBuild sampler\r\n");
+    mem_stat = mem_usage;
     Sampler sampler;
-    build_sampler(&sampler, VOCAB_SIZE, temperature, topp, rng_seed);
-
-    printf("\r\nRun\r\n");
+    error = build_sampler(&sampler, VOCAB_SIZE, temperature, topp, rng_seed);
+    if (error != kNoError)
+    {
+        goto error;
+    }
+    printf("  Allocated sampler memory %u bytes (0x%X) \r\n",mem_usage-mem_stat,mem_usage-mem_stat);
 
     INIT_SYSTICK;
 
-    // run!
-    generate(&transformer, &tokenizer, &sampler, prompt, steps);
-   
+    checkDTCMTime();
+    checkITCMTime();
+
+    printf("\r\nTotal allocated runtime memory %u bytes (0x%X) \r\n",mem_usage,mem_usage);
+
+    printf("\r\nRun\r\n\r\n");
+
+    error = generate(&transformer, &tokenizer, &sampler, prompt, steps);
+    if (error != kNoError)
+    {
+        goto error;
+    }
 
     printf("\r\nEnd generation\r\n");
 
-    // memory and file handles cleanup
-    free_sampler(&sampler);
-    free_tokenizer(&tokenizer);
-    free_transformer(&transformer);
-    //#if !defined(MPS3)
-    //free((void*)network_mem);
-    //free((void*)tokenizer_mem);
-    //#endif
-    
+error:
+   // memory and file handles cleanup
+   free_sampler(&sampler);
+   free_tokenizer(&tokenizer);
+   free_transformer(&transformer);
+   if (error!=0)
+   {
+      printf("An error occured %d. Allocated memory %u bytes (0x%X)\r\n",error,mem_usage,mem_usage);
+   }  
 }
 
