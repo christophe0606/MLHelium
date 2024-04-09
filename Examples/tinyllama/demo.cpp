@@ -1,4 +1,16 @@
-/* Inference for Llama-2 Transformer model in pure C */
+/* Inference for Llama-2 Transformer model in pure C 
+ * 
+ * Modified from https://github.com/karpathy/llama2.c to:
+ * - Use f16
+ * - Use memory mapped files (and the file format used in this project)
+ * - Use CMSIS-DSP
+ * - Use Helium
+ * - Chat removed
+ * - Use CMSIS build tools
+ * 
+ * Original Copyright (c) 2023 Andrej 
+ * 
+ */
 
 #include "RTE_Components.h"
 #include  CMSIS_device_header
@@ -17,17 +29,15 @@
 #include <iostream>
 #include <fstream>
 
-#include "dsp/matrix_functions.h"
-#include "dsp/support_functions.h"
-#include "dsp/statistics_functions.h"
-#include "dsp/basic_math_functions.h"
-
-
 #include "dsp/matrix_functions_f16.h"
-#include "dsp/support_functions_f16.h"
-#include "dsp/statistics_functions_f16.h"
 #include "dsp/basic_math_functions_f16.h"
+#include "dsp/fast_math_functions_f16.h"
 
+//#include "dsp/support_functions_f16.h"
+//#include "dsp/statistics_functions_f16.h"
+//#include "dsp/basic_math_functions_f16.h"
+
+#include "kernels.h"
 
 #define DIM 288
 #define HIDDEN_DIM 768
@@ -94,81 +104,77 @@ void * ml_aligned_malloc( size_t bytes )
 // ----------------------------------------------------------------------------
 // Transformer model
 
-template<typename T>
 struct TransformerWeights {
     // token embedding table
-    T* token_embedding_table;    // (vocab_size, dim)
+    float16_t* token_embedding_table;    // (vocab_size, dim)
     // weights for rmsnorms
-    T* rms_att_weight[N_LAYERS]; // (layer, dim) rmsnorm weights
-    T* rms_ffn_weight[N_LAYERS]; // (layer, dim)
+    float16_t* rms_att_weight[N_LAYERS]; // (layer, dim) rmsnorm weights
+    float16_t* rms_ffn_weight[N_LAYERS]; // (layer, dim)
     // weights for matmuls. note dim == n_heads * head_size
-    T* wq[N_LAYERS]; // (layer, dim, n_heads * head_size)
-    T* wk[N_LAYERS]; // (layer, dim, n_kv_heads * head_size)
-    T* wv[N_LAYERS]; // (layer, dim, n_kv_heads * head_size)
-    T* wo[N_LAYERS]; // (layer, n_heads * head_size, dim)
+    float16_t* wq[N_LAYERS]; // (layer, dim, n_heads * head_size)
+    float16_t* wk[N_LAYERS]; // (layer, dim, n_kv_heads * head_size)
+    float16_t* wv[N_LAYERS]; // (layer, dim, n_kv_heads * head_size)
+    float16_t* wo[N_LAYERS]; // (layer, n_heads * head_size, dim)
     // weights for ffn
-    T* w1[N_LAYERS]; // (layer, hidden_dim, dim)
-    T* w2[N_LAYERS]; // (layer, dim, hidden_dim)
-    T* w3[N_LAYERS]; // (layer, hidden_dim, dim)
+    float16_t* w1[N_LAYERS]; // (layer, hidden_dim, dim)
+    float16_t* w2[N_LAYERS]; // (layer, dim, hidden_dim)
+    float16_t* w3[N_LAYERS]; // (layer, hidden_dim, dim)
     // final rmsnorm
-    T* rms_final_weight; // (dim,)
+    float16_t* rms_final_weight; // (dim,)
     // (optional) classifier weights for the logits, on the last layer
-    T* wcls;
+    float16_t* wcls;
 } ;
 
-template<typename T>
 struct RunState {
     // current wave of activations
-    T *x; // activation at current time stamp (dim,)
-    T *xb; // same, but inside a residual branch (dim,)
-    T *xb2; // an additional buffer just for convenience (dim,)
-    T *hb; // buffer for hidden dimension in the ffn (hidden_dim,)
-    T *hb2; // buffer for hidden dimension in the ffn (hidden_dim,)
-    T *q; // query (dim,)
-    T *k; // key (dim,)
-    T *v; // value (dim,)
-    T *att; // buffer for scores/attention values (n_heads, seq_len)
-    T *logits; // output logits
+    float16_t* x; // activation at current time stamp (dim,)
+    float16_t* xb; // same, but inside a residual branch (dim,)
+    float16_t* xb2; // an additional buffer just for convenience (dim,)
+    float16_t* hb; // buffer for hidden dimension in the ffn (hidden_dim,)
+    float16_t* hb2; // buffer for hidden dimension in the ffn (hidden_dim,)
+    float16_t* q; // query (dim,)
+    float16_t* k; // key (dim,)
+    float16_t* v; // value (dim,)
+    float16_t* att; // buffer for scores/attention values (n_heads, seq_len)
+    float16_t* logits; // output logits
     // kv cache
-    T* key_cache;   // (layer, seq_len, dim)
-    T* value_cache; // (layer, seq_len, dim)
+    float16_t* key_cache;   // (layer, seq_len, dim)
+    float16_t* value_cache; // (layer, seq_len, dim)
 } ;
 
-template<typename T>
 struct Transformer {
-    TransformerWeights<T> weights; // the weights of the model
-    RunState<T> state; // buffers for the "wave" of activations in the forward pass
+    TransformerWeights weights; // the weights of the model
+    RunState state; // buffers for the "wave" of activations in the forward pass
 } ;
 
-template<typename T>
-int malloc_run_state(RunState<T>* s) {
+int malloc_run_state(RunState* s) {
     // we ml_calloc instead of malloc to keep valgrind happy
 
-    //s->x = (T*)ml_aligned_calloc(DIM, sizeof(T));
-    //s->xb = (T*)ml_aligned_calloc(DIM, sizeof(T));
-    //s->xb2 = (T*)ml_aligned_calloc(DIM, sizeof(T));
+    //s->x = (float16_t*)ml_aligned_calloc(DIM, sizeof(float16_t));
+    //s->xb = (float16_t*)ml_aligned_calloc(DIM, sizeof(float16_t));
+    //s->xb2 = (float16_t*)ml_aligned_calloc(DIM, sizeof(float16_t));
     
-    s->x = (T*)add_aligned_buffer_to_area(&internal,DIM*sizeof(T),8);
-    s->xb = (T*)add_aligned_buffer_to_area(&internal,DIM*sizeof(T),8);
-    s->xb2 = (T*)add_aligned_buffer_to_area(&internal,DIM*sizeof(T),8);
+    s->x = (float16_t*)add_aligned_buffer_to_area(&internal,DIM*sizeof(float16_t),8);
+    s->xb = (float16_t*)add_aligned_buffer_to_area(&internal,DIM*sizeof(float16_t),8);
+    s->xb2 = (float16_t*)add_aligned_buffer_to_area(&internal,DIM*sizeof(float16_t),8);
 
-    //s->hb = (T*)ml_aligned_calloc(HIDDEN_DIM, sizeof(T));
-    //s->hb2 = (T*)ml_aligned_calloc(HIDDEN_DIM, sizeof(T));
+    //s->hb = (float16_t*)ml_aligned_calloc(HIDDEN_DIM, sizeof(float16_t));
+    //s->hb2 = (float16_t*)ml_aligned_calloc(HIDDEN_DIM, sizeof(float16_t));
     
-    s->hb = (T*)add_aligned_buffer_to_area(&internal,HIDDEN_DIM*sizeof(T),8);
-    s->hb2 = (T*)add_aligned_buffer_to_area(&internal,HIDDEN_DIM*sizeof(T),8);
+    s->hb = (float16_t*)add_aligned_buffer_to_area(&internal,HIDDEN_DIM*sizeof(float16_t),8);
+    s->hb2 = (float16_t*)add_aligned_buffer_to_area(&internal,HIDDEN_DIM*sizeof(float16_t),8);
 
-    //s->q = (T*)ml_aligned_calloc(DIM, sizeof(T));
-    s->q = (T*)add_aligned_buffer_to_area(&internal,DIM*sizeof(T),8);
+    //s->q = (float16_t*)ml_aligned_calloc(DIM, sizeof(float16_t));
+    s->q = (float16_t*)add_aligned_buffer_to_area(&internal,DIM*sizeof(float16_t),8);
 
-    s->key_cache = (T*)ml_aligned_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(T));
-    s->value_cache = (T*)ml_aligned_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(T));
+    s->key_cache = (float16_t*)ml_aligned_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(float16_t));
+    s->value_cache = (float16_t*)ml_aligned_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(float16_t));
     
-    //s->att = (T*)ml_aligned_calloc(N_HEADS * MAX_SEQ_LEN, sizeof(T));
-    s->att = (T*)add_aligned_buffer_to_area(&internal,N_HEADS * MAX_SEQ_LEN*sizeof(T),8);
+    //s->att = (float16_t*)ml_aligned_calloc(N_HEADS * MAX_SEQ_LEN, sizeof(float16_t));
+    s->att = (float16_t*)add_aligned_buffer_to_area(&internal,N_HEADS * MAX_SEQ_LEN*sizeof(float16_t),8);
 
-    //s->logits = (T*)ml_aligned_calloc(VOCAB_SIZE, sizeof(T));
-    s->logits = (T*)add_aligned_buffer_to_area(&internal,VOCAB_SIZE*sizeof(T),8);
+    //s->logits = (float16_t*)ml_aligned_calloc(VOCAB_SIZE, sizeof(float16_t));
+    s->logits = (float16_t*)add_aligned_buffer_to_area(&internal,VOCAB_SIZE*sizeof(float16_t),8);
 
     // ensure all mallocs went fine
     if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q
@@ -178,8 +184,7 @@ int malloc_run_state(RunState<T>* s) {
     return(kNoError);
 }
 
-template<typename T>
-void free_run_state(RunState<T>* s) {
+void free_run_state(RunState* s) {
     if (!s)
     {
         return;
@@ -196,8 +201,7 @@ void free_run_state(RunState<T>* s) {
     aligned_free(s->value_cache);
 }
 
-template<typename T>
-void memory_map_weights(TransformerWeights<T> *w, const unsigned char* ptr) {
+void memory_map_weights(TransformerWeights *w, const unsigned char* ptr) {
     // make sure the multiplications below are done in 64bit to fit the parameter counts of 13B+ models
     int ID = 0;
     w->token_embedding_table = get_f16_tensor(ptr,ID++);
@@ -243,72 +247,36 @@ void memory_map_weights(TransformerWeights<T> *w, const unsigned char* ptr) {
     w->wcls = SHARED_WEIGHTS ? w->token_embedding_table : get_f16_tensor(ptr,ID++);
 }
 
-template<typename T>
-int read_checkpoint(const unsigned char* memory, TransformerWeights<T>* weights) {
-    //FILE *file = fopen(checkpoint, "rb");
+int read_checkpoint(const unsigned char* memory, TransformerWeights* weights) {
     if (!memory) { 
         return(kNoMemoryBufferForCheckpoint); 
     }
     
 
-    memory_map_weights<T>(weights, memory);
+    memory_map_weights(weights, memory);
     return(kNoError);
 }
 
-template<typename T>
-int build_transformer(Transformer<T> *t, const unsigned char* memory) {
+int build_transformer(Transformer *t, const unsigned char* memory) {
     // read in the Config and the Weights from the checkpoint
-    int err = read_checkpoint<T>(memory, &t->weights);
+    int err = read_checkpoint(memory, &t->weights);
     if (err!=kNoError)
     {
         return(err);
     }
     // allocate the RunState buffers
-    err = malloc_run_state<T>(&t->state);
+    err = malloc_run_state(&t->state);
     return(err);
 }
 
-template<typename T>
-void free_transformer(Transformer<T>* t) {
+void free_transformer(Transformer* t) {
     // free the RunState buffers
-    free_run_state<T>(&t->state);
+    free_run_state(&t->state);
 }
 
 // ----------------------------------------------------------------------------
 // neural net blocks; the dynamics of the Transformer
 
-void rmsnorm(float16_t* o, float16_t* x, float16_t* weight, int size) {
-
-    // calculate sum of squares
-    float16_t ss = 0.0f16;
-    arm_power_f16(x, size, &ss);
-    ss /= (_Float16)size;
-    ss += 1e-5f16;
-    ss = 1.0f16 / (_Float16)sqrtf(ss);
-
-    // normalize and scale
-    arm_scale_f16(x,ss,o,size);
-    arm_mult_f16(weight,o,o,size);
-    
-
-}
-
-void softmax(float16_t* x, int size) {
-
-    // find max value (for numerical stability)
-    float16_t max_val;
-    arm_max_no_idx_f16(x, size, &max_val);
-
-    // exp and sum
-    float sum = 0.0f16;
-    for (int i = 0; i < size; i++) {
-        x[i] = (_Float16)expf((_Float16)x[i] - (_Float16)max_val);
-        sum += (_Float16)x[i];
-    }
-
-    arm_scale_f16(x,1.0f16 / sum,x,size);
-
-}
 
 
 
@@ -325,61 +293,24 @@ void matmul(float16_t* xout, float16_t* x, float16_t* w, int n, int d) {
 }
 
 
-// CMSIS-DSP optimizations
-
-__STATIC_INLINE float16_t dot_prod(const float16_t *a, 
-                                   const float16_t *b, 
-                                   uint32_t nb)
-{
-   float16_t result;
-
-   arm_dot_prod_f16(a,b,nb,&result);
-
-   return(result);
-}
-
-
-
-__STATIC_INLINE void vec_add(const float16_t *a, 
-                              const float16_t *b, 
-                              float16_t *o,
-                              uint32_t nb)
-{
-
-   arm_add_f16(a,b,o,nb);
-
-}
-
-
-template<typename T>
-struct Comp;
-
-template<>
-struct Comp<float16_t>
-{
-    using type = _Float16;
-};
-
-template<typename T>
-T* forward(Transformer<T>* transformer, int token, int pos) {
+float16_t* forward(Transformer* transformer, int token, int pos) {
 
     // a few convenience variables
-    using C = typename Comp<T>::type;
-    TransformerWeights<T>* w = &transformer->weights;
-    RunState<T>* s = &transformer->state;
-    T *x = s->x;
+    TransformerWeights* w = &transformer->weights;
+    RunState* s = &transformer->state;
+    float16_t *x = s->x;
     int kv_mul = N_HEADS / N_KV_HEADS; // integer multiplier of the kv sharing in multiquery
     int head_size = DIM / N_HEADS;
 
     // copy the token embedding into x
-    T* content_row = w->token_embedding_table + token * DIM;
-    memcpy(x, content_row, DIM*sizeof(T));
+    float16_t* content_row = w->token_embedding_table + token * DIM;
+    memcpy(x, content_row, DIM*sizeof(float16_t));
 
     // forward all the layers
     for(int l = 0; l < N_LAYERS; l++) {
 
         // attention rmsnorm
-        rmsnorm(s->xb, x, w->rms_att_weight[l], DIM);
+        arm_rms_norm_f16(s->xb, x, w->rms_att_weight[l], DIM);
 
         // key and value point to the kv cache
         int loff = l * MAX_SEQ_LEN * KV_DIM; // kv cache layer offset for convenience
@@ -394,19 +325,19 @@ T* forward(Transformer<T>* transformer, int token, int pos) {
         // RoPE relative positional encoding: complex-valued rotate q and k in each head
         for (int i = 0; i < DIM; i+=2) {
             int head_dim = i % head_size;
-            T freq = (C)1.0f / (C)powf(10000.0f, head_dim / (T)head_size);
-            T val = (C)pos * (C)freq;
+            float16_t freq = (_Float16)1.0f16 / (_Float16)powf(10000.0f, head_dim / (float)head_size);
+            float16_t val = (_Float16)pos * (_Float16)freq;
             //T fcr = (T)cosf(val);
             //T fci = (T)sinf(val);
-            T fcr = (T)arm_cos_f32((float32_t)val);
-            T fci = (T)arm_sin_f32((float32_t)val);
+            float16_t fcr = (float16_t)arm_cos_f32((float32_t)val);
+            float16_t fci = (float16_t)arm_sin_f32((float32_t)val);
             int rotn = i < KV_DIM ? 2 : 1; // how many vectors? 2 = q & k, 1 = q only
             for (int v = 0; v < rotn; v++) {
-                T* vec = v == 0 ? s->q : s->k; // the vector to rotate (query or key)
-                T v0 = vec[i];
-                T v1 = vec[i+1];
-                vec[i]   = (C)v0 * (C)fcr - (C)v1 * (C)fci;
-                vec[i+1] = (C)v0 * (C)fci + (C)v1 * (C)fcr;
+                float16_t* vec = v == 0 ? s->q : s->k; // the vector to rotate (query or key)
+                float16_t v0 = vec[i];
+                float16_t v1 = vec[i+1];
+                vec[i]   = (_Float16)v0 * (_Float16)fcr - (_Float16)v1 * (_Float16)fci;
+                vec[i+1] = (_Float16)v0 * (_Float16)fci + (_Float16)v1 * (_Float16)fcr;
             }
         }
 
@@ -415,40 +346,41 @@ T* forward(Transformer<T>* transformer, int token, int pos) {
         #pragma omp parallel for private(h)
         for (h = 0; h < N_HEADS; h++) {
             // get the query vector for this head
-            T* q = s->q + h * head_size;
+            float16_t* q = s->q + h * head_size;
             // attention scores for this head
-            T* att = s->att + h * MAX_SEQ_LEN;
+            float16_t* att = s->att + h * MAX_SEQ_LEN;
             // iterate over all timesteps, including the current one
             for (int t = 0; t <= pos; t++) {
                 // get the key vector for this head and at this timestep
-                T* k = s->key_cache + loff + t * KV_DIM + (h / kv_mul) * head_size;
+                float16_t* k = s->key_cache + loff + t * KV_DIM + (h / kv_mul) * head_size;
                 // calculate the attention score as the dot product of q and k
-                T score = 0.0f;
-                score = dot_prod(q,k,head_size);
+                float16_t score = 0.0f16;
+                arm_dot_prod_f16(q,k,head_size,&score);
+
                 /*
                 for (int i = 0; i < head_size; i++) {
                     score += q[i] * k[i];
                 }
                 */
-                score /= (C)sqrtf(head_size);
+                score /= (_Float16)sqrtf(head_size);
                 // save the score to the attention buffer
                 att[t] = score;
             }
 
             // softmax the scores to get attention weights, from 0..pos inclusively
-            softmax(att, pos + 1);
+            arm_softmax_f16(att, pos + 1);
 
             // weighted sum of the values, store back into xb
-            T* xb = s->xb + h * head_size;
-            memset(xb, 0, head_size * sizeof(T));
+            float16_t* xb = s->xb + h * head_size;
+            memset(xb, 0, head_size * sizeof(float16_t));
             for (int t = 0; t <= pos; t++) {
                 // get the value vector for this head and at this timestep
-                T* v = s->value_cache + loff + t * KV_DIM + (h / kv_mul) * head_size;
+                float16_t* v = s->value_cache + loff + t * KV_DIM + (h / kv_mul) * head_size;
                 // get the attention weight for this timestep
-                T a = att[t];
+                float16_t a = att[t];
                 // accumulate the weighted value into xb
                 for (int i = 0; i < head_size; i++) {
-                    xb[i] += (C)a * (C)v[i];
+                    xb[i] += (_Float16)a * (_Float16)v[i];
                 }
             }
         }
@@ -457,7 +389,7 @@ T* forward(Transformer<T>* transformer, int token, int pos) {
         matmul(s->xb2, s->xb, w->wo[l], DIM, DIM);
 
         // residual connection back into x
-        vec_add(x,s->xb2,x,DIM);
+        arm_add_f16(x,s->xb2,x,DIM);
         /*
         for (int i = 0; i < dim; i++) {
             x[i] += s->xb2[i];
@@ -465,7 +397,7 @@ T* forward(Transformer<T>* transformer, int token, int pos) {
         */
 
         // ffn rmsnorm
-        rmsnorm(s->xb, x, w->rms_ffn_weight[l], DIM);
+        arm_rms_norm_f16(s->xb, x, w->rms_ffn_weight[l], DIM);
 
         // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
         // first calculate self.w1(x) and self.w3(x)
@@ -474,11 +406,11 @@ T* forward(Transformer<T>* transformer, int token, int pos) {
 
         // SwiGLU non-linearity
         for (int i = 0; i < HIDDEN_DIM; i++) {
-            T val = s->hb[i];
+            float16_t val = s->hb[i];
             // silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-            val *= (C)((C)1.0f / (C)((C)1.0f + (C)expf(-val)));
+            val *= (_Float16)((_Float16)1.0f16 / (_Float16)((_Float16)1.0f16 + (_Float16)expf((float)-val)));
             // elementwise multiply with w3(x)
-            val *= (C)(s->hb2[i]);
+            val *= (_Float16)(s->hb2[i]);
             s->hb[i] = val;
         }
 
@@ -487,7 +419,7 @@ T* forward(Transformer<T>* transformer, int token, int pos) {
 
         // residual connection
 
-        vec_add(x,s->xb,x,DIM);
+        arm_add_f16(x,s->xb,x,DIM);
         /*
         for (int i = 0; i < dim; i++) {
             x[i] += s->xb[i];
@@ -496,7 +428,7 @@ T* forward(Transformer<T>* transformer, int token, int pos) {
     }
 
     // final rmsnorm
-    rmsnorm(x, x, w->rms_final_weight, DIM);
+    arm_rms_norm_f16(x, x, w->rms_final_weight, DIM);
 
     // classifier into logits
     matmul(s->logits, x, w->wcls, DIM, VOCAB_SIZE);
@@ -528,10 +460,12 @@ template<typename T>
 T interpret(const unsigned char* p)
 {
     uint32_t v;
+    /* Data may be unaligned in the tokenizer buffer */
     memcpy(&v,p,4);
 
     return(*reinterpret_cast<const T*>(&v));
 }
+
 int build_tokenizer(Tokenizer* t, const unsigned char* memory, int vocab_size) {
     // i should have written the vocab_size into the tokenizer file... sigh
     t->vocab_size = vocab_size;
@@ -774,11 +708,10 @@ struct Sampler {
     unsigned long long rng_state;
 } ;
 
-template<typename T>
-int sample_argmax(T* probabilities, int n) {
+int sample_argmax(float16_t* probabilities, int n) {
     // return the index that has the highest probability
     int max_i = 0;
-    T max_p = probabilities[0];
+    float max_p = probabilities[0];
     for (int i = 1; i < n; i++) {
         if (probabilities[i] > max_p) {
             max_i = i;
@@ -788,11 +721,10 @@ int sample_argmax(T* probabilities, int n) {
     return max_i;
 }
 
-template<typename T>
-int sample_mult(T* probabilities, int n, float coin) {
+int sample_mult(float16_t* probabilities, int n, float coin) {
     // sample index from probabilities (they must sum to 1!)
     // coin is a random number in [0, 1), usually from random_f32()
-    T cdf = 0.0f;
+    float cdf = 0.0f;
     for (int i = 0; i < n; i++) {
         cdf += probabilities[i];
         if (coin < cdf) {
@@ -810,8 +742,7 @@ int compare(const void* a, const void* b) {
     return 0;
 }
 
-template<typename T>
-int sample_topp(T* probabilities, int n, float topp, ProbIndex* probindex, float coin) {
+int sample_topp(float16_t* probabilities, int n, float topp, ProbIndex* probindex, float coin) {
     // top-p sampling (or "nucleus sampling") samples from the smallest set of
     // tokens that exceed probability topp. This way we never sample tokens that
     // have very low probabilities and are less likely to go "off the rails".
@@ -821,7 +752,7 @@ int sample_topp(T* probabilities, int n, float topp, ProbIndex* probindex, float
     // quicksort indices in descending order of probabilities
     // values smaller than (1 - topp) / (n - 1) cannot be part of the result
     // so for efficiency we crop these out as candidates before sorting
-    const T cutoff = (1.0f - topp) / (n - 1);
+    const float cutoff = (1.0f - topp) / (n - 1);
     for (int i = 0; i < n; i++) {
         if (probabilities[i] >= cutoff) {
             probindex[n0].index = i;
@@ -832,7 +763,7 @@ int sample_topp(T* probabilities, int n, float topp, ProbIndex* probindex, float
     qsort(probindex, n0, sizeof(ProbIndex), compare);
 
     // truncate the list where cumulative probability exceeds topp
-    T cumulative_prob = 0.0f;
+    float cumulative_prob = 0.0f;
     int last_idx = n0 - 1; // in case of rounding errors consider all elements
     for (int i = 0; i < n0; i++) {
         cumulative_prob += probindex[i].prob;
@@ -843,8 +774,8 @@ int sample_topp(T* probabilities, int n, float topp, ProbIndex* probindex, float
     }
 
     // sample from the truncated list
-    T r = coin * cumulative_prob;
-    T cdf = 0.0f;
+    float r = coin * cumulative_prob;
+    float cdf = 0.0f;
     for (int i = 0; i <= last_idx; i++) {
         cdf += probindex[i].prob;
         if (r < cdf) {
@@ -887,8 +818,7 @@ float random_f32(unsigned long long *state) { // random float32 in [0,1)
     return (random_u32(state) >> 8) / 16777216.0f;
 }
 
-template<typename T>
-int sample(Sampler* sampler, T* logits) {
+int sample(Sampler* sampler, float16_t* logits) {
     // sample the token given the logits and some hyperparameters
     int next;
     if (sampler->temperature == 0.0f) {
@@ -898,7 +828,7 @@ int sample(Sampler* sampler, T* logits) {
         // apply the temperature to the logits
         for (int q=0; q<sampler->vocab_size; q++) { logits[q] /= sampler->temperature; }
         // apply softmax to the logits to get the probabilities for next token
-        softmax(logits, sampler->vocab_size);
+        arm_softmax_f16(logits, sampler->vocab_size);
         // flip a (float) coin (this is our source of entropy for sampling)
         float coin = random_f32(&sampler->rng_state);
         // we sample from this distribution to get the next token
@@ -944,8 +874,7 @@ long time_in_cycles() {
 // ----------------------------------------------------------------------------
 // generation loop
 
-template<typename T>
-int generate(Transformer<T> *transformer, Tokenizer *tokenizer, Sampler *sampler, const char *prompt, int steps) {
+int generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, const char *prompt, int steps) {
     const char *empty_prompt = "";
     if (prompt == NULL) { prompt = empty_prompt; }
 
@@ -974,7 +903,7 @@ int generate(Transformer<T> *transformer, Tokenizer *tokenizer, Sampler *sampler
     while (pos < steps) {
 
         // forward the transformer to get logits for the next token
-        T* logits = forward(transformer, token, pos);
+        float16_t* logits = forward(transformer, token, pos);
         #if defined(STATS)
         printf("Max vec = %lu\r\n",maxvec);
         #endif
@@ -1014,9 +943,6 @@ int generate(Transformer<T> *transformer, Tokenizer *tokenizer, Sampler *sampler
 }
 
 
-
-
-static const std::string s[3]={"test","network.dat"};
 
 const unsigned char* load_mem(const char* checkpoint,const unsigned char* refbuf)
 {
@@ -1110,7 +1036,7 @@ __STATIC_INLINE void testITCM()
         :);
 }
 
-__STATIC_INLINE void testDTCM(void *ptr)
+__STATIC_INLINE void testMemAccess(const void *ptr)
 {
     __asm volatile (
         "  LDR r5,[%[src]] \n"
@@ -1173,11 +1099,24 @@ void checkDTCMTime()
     printf("\r\nCheck DTCM time measurement (should be close to 50 cycles)\r\n");
     long mem;
     long a = time_in_cycles();
-    testDTCM(&mem);
-    testDTCM(&mem);
-    testDTCM(&mem);
-    testDTCM(&mem);
-    testDTCM(&mem);
+    testMemAccess(&mem);
+    testMemAccess(&mem);
+    testMemAccess(&mem);
+    testMemAccess(&mem);
+    testMemAccess(&mem);
+    long b = time_in_cycles();
+    printf("  Test time %ld\r\n",(a-b)/5);
+}
+
+void checkExtMemTime(const void *ptr)
+{
+    printf("\r\nCheck external memory time measurement (should be close to 50 cycles with cache)\r\n");
+    long a = time_in_cycles();
+    testMemAccess(ptr);
+    testMemAccess(ptr);
+    testMemAccess(ptr);
+    testMemAccess(ptr);
+    testMemAccess(ptr);
     long b = time_in_cycles();
     printf("  Test time %ld\r\n",(a-b)/5);
 }
@@ -1216,7 +1155,7 @@ void demo() {
     float temperature = 1.0f;   // 0.0 = greedy deterministic. 1.0 = original. don't set higher
     float topp = 0.9f;          // top-p in nucleus sampling. 1.0 = off. 0.9 works well, but slower
     int steps = 256;            // number of steps to run for
-    const char *prompt = NULL;        // prompt string
+    const char *prompt = "Once upon a time";        // prompt string
     unsigned long long rng_seed = 0; // seed rng with time by default
 
     // parameter validation/overrides
@@ -1227,9 +1166,6 @@ void demo() {
     if (topp < 0.0 || 1.0 < topp) topp = 0.9;
     if (steps < 0) steps = 0;
 
-    #if defined(MPS3)
-    printf("\r\nLoad data\r\n");
-    #endif
     #if !defined(MPS3)
       network_mem = load_mem((const char*)"network.dat",(const unsigned char*)0x70000000);
       tokenizer_mem = load_mem((const char*)"tokenizer.bin",(const unsigned char*)0x71D00000);
@@ -1249,7 +1185,7 @@ void demo() {
     printf("\r\nBuild transformer\r\n");
 
     // build the Transformer via the model .bin file
-    Transformer<float16_t> transformer;
+    Transformer transformer;
 
     uint32_t mem_stat = mem_usage;
     uint32_t int_mem_stat = internal.current_bytes;
@@ -1297,12 +1233,13 @@ void demo() {
     INIT_SYSTICK;
 
     checkDTCMTime();
+    checkExtMemTime((void*)network_mem);
     checkITCMTime();
 
     printf("\r\nTotal Heap allocated runtime memory %u bytes (0x%X) \r\n",mem_usage,mem_usage);
-    printf("  Total Internal allocated memory %u bytes (0x%X) \r\n",internal.current_bytes,internal.current_bytes);
+    printf("Total Internal allocated memory %u bytes (0x%X) \r\n",internal.current_bytes,internal.current_bytes);
 
-    printf("\r\nRun\r\n\r\n");
+    printf("\r\nRunning ...\r\n\r\n");
 
     error = generate(&transformer, &tokenizer, &sampler, prompt, steps);
     if (error != kNoError)

@@ -1,0 +1,14 @@
+layer:
+  description: ML Kernels not available in CMSIS-DSP
+  
+  groups:
+    - group: MLKernels
+      files:
+        - file: NonLinearActivations/arm_rms_norm_f16.c
+        - file: NonLinearActivations/arm_softmax_f16.c
+
+  add-path:
+      - .
+
+  
+      

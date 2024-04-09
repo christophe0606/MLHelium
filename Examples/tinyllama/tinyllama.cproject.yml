@@ -13,6 +13,7 @@ project:
   layers:
     - layer: $Board-Layer$
       type: Board
+    - layer: $ML-Layer$
 
   linker:
     - script: $AC6-Link-Script$
