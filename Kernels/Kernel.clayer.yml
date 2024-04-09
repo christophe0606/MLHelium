@@ -4,8 +4,8 @@ layer:
   groups:
     - group: MLKernels
       files:
-        - file: NonLinearActivations/arm_rms_norm_f16.c
-        - file: NonLinearActivations/arm_softmax_f16.c
+        - file: NonLinearActivations/arm_rms_norm_f16.cpp
+        - file: NonLinearActivations/arm_softmax_f16.cpp
 
   add-path:
       - .
