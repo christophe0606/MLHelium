@@ -35,11 +35,9 @@
 
 #include "dsp/matrix_functions_f16.h"
 #include "dsp/basic_math_functions_f16.h"
+#include "dsp/complex_math_functions_f16.h"
 #include "dsp/fast_math_functions_f16.h"
 
-//#include "dsp/support_functions_f16.h"
-//#include "dsp/statistics_functions_f16.h"
-//#include "dsp/basic_math_functions_f16.h"
 
 #include "kernels.h"
 
@@ -59,7 +57,7 @@
 Internal memory for some part of the transformer state
 
 */
-#define NB_INT_MEM ((N_HEADS * MAX_SEQ_LEN + VOCAB_SIZE + 4*DIM+2*HIDDEN_DIM)*sizeof(float16_t))
+#define NB_INT_MEM ((DIM+N_HEADS * MAX_SEQ_LEN + VOCAB_SIZE + 4*DIM+2*HIDDEN_DIM)*sizeof(float16_t))
 static unsigned char* internal_mem[NB_INT_MEM];
 static memory_area_t internal ;
 
@@ -127,6 +125,11 @@ struct TransformerWeights {
     float16_t* rms_final_weight; // (dim,)
     // (optional) classifier weights for the logits, on the last layer
     float16_t* wcls;
+
+    // Precomputed sin and cos frequencies
+    // cos sin interleaved
+    float16_t *freq_cos_sin;
+
 } ;
 
 struct RunState {
@@ -144,6 +147,9 @@ struct RunState {
     // kv cache
     float16_t* key_cache;   // (layer, seq_len, dim)
     float16_t* value_cache; // (layer, seq_len, dim)
+
+    // cos_sin cache 
+    float16_t *cs_cache;
 } ;
 
 struct Transformer {
@@ -152,37 +158,33 @@ struct Transformer {
 } ;
 
 int malloc_run_state(RunState* s) {
-    // we ml_calloc instead of malloc to keep valgrind happy
 
-    //s->x = (float16_t*)ml_aligned_calloc(DIM, sizeof(float16_t));
-    //s->xb = (float16_t*)ml_aligned_calloc(DIM, sizeof(float16_t));
-    //s->xb2 = (float16_t*)ml_aligned_calloc(DIM, sizeof(float16_t));
     
     s->x = (float16_t*)add_aligned_buffer_to_area(&internal,DIM*sizeof(float16_t),8);
     s->xb = (float16_t*)add_aligned_buffer_to_area(&internal,DIM*sizeof(float16_t),8);
     s->xb2 = (float16_t*)add_aligned_buffer_to_area(&internal,DIM*sizeof(float16_t),8);
 
-    //s->hb = (float16_t*)ml_aligned_calloc(HIDDEN_DIM, sizeof(float16_t));
-    //s->hb2 = (float16_t*)ml_aligned_calloc(HIDDEN_DIM, sizeof(float16_t));
     
     s->hb = (float16_t*)add_aligned_buffer_to_area(&internal,HIDDEN_DIM*sizeof(float16_t),8);
     s->hb2 = (float16_t*)add_aligned_buffer_to_area(&internal,HIDDEN_DIM*sizeof(float16_t),8);
 
-    //s->q = (float16_t*)ml_aligned_calloc(DIM, sizeof(float16_t));
     s->q = (float16_t*)add_aligned_buffer_to_area(&internal,DIM*sizeof(float16_t),8);
 
+    // Caches are too big for internal memory so they are
+    // allocated in the external heap
     s->key_cache = (float16_t*)ml_aligned_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(float16_t));
     s->value_cache = (float16_t*)ml_aligned_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(float16_t));
     
-    //s->att = (float16_t*)ml_aligned_calloc(N_HEADS * MAX_SEQ_LEN, sizeof(float16_t));
     s->att = (float16_t*)add_aligned_buffer_to_area(&internal,N_HEADS * MAX_SEQ_LEN*sizeof(float16_t),8);
 
-    //s->logits = (float16_t*)ml_aligned_calloc(VOCAB_SIZE, sizeof(float16_t));
     s->logits = (float16_t*)add_aligned_buffer_to_area(&internal,VOCAB_SIZE*sizeof(float16_t),8);
+
+    s->cs_cache = (float16_t*)add_aligned_buffer_to_area(&internal,DIM*sizeof(float16_t),8);
 
     // ensure all mallocs went fine
     if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q
-     || !s->key_cache || !s->value_cache || !s->att || !s->logits) {
+     || !s->key_cache || !s->value_cache || !s->att || !s->logits
+     || !s->cs_cache) {
         return(kErrorAllocRunState);
     }
     return(kNoError);
@@ -193,6 +195,7 @@ void free_run_state(RunState* s) {
     {
         return;
     }
+    // Using internal memory so no need to be released
     //aligned_free(s->x);
     //aligned_free(s->xb);
     //aligned_free(s->xb2);
@@ -206,7 +209,7 @@ void free_run_state(RunState* s) {
 }
 
 void memory_map_weights(TransformerWeights *w, const unsigned char* ptr) {
-    // make sure the multiplications below are done in 64bit to fit the parameter counts of 13B+ models
+    // Get pointer to the weights inside the memory mapped network
     int ID = 0;
     w->token_embedding_table = get_f16_tensor(ptr,ID++);
     for(int l=0;l < N_LAYERS; l++)
@@ -248,6 +251,9 @@ void memory_map_weights(TransformerWeights *w, const unsigned char* ptr) {
     }
     
     w->rms_final_weight = get_f16_tensor(ptr,ID++);
+
+    w->freq_cos_sin = get_f16_tensor(ptr,ID++);
+
     w->wcls = SHARED_WEIGHTS ? w->token_embedding_table : get_f16_tensor(ptr,ID++);
 }
 
@@ -284,10 +290,10 @@ void free_transformer(Transformer* t) {
 
 
 
-void matmul(float16_t* xout, float16_t* x, float16_t* w, int n, int d) {
+void matmul(float16_t* xout, float16_t* x, float16_t* w, int cols, int rows) {
     arm_matrix_instance_f16 W;
-    W.numRows = d;
-    W.numCols = n;
+    W.numRows = rows;
+    W.numCols = cols;
     W.pData = w;
 
 
@@ -327,27 +333,18 @@ float16_t* forward(Transformer* transformer, int token, int pos) {
         matmul(s->v, s->xb, w->wv[l], DIM, KV_DIM);
 
         // RoPE relative positional encoding: complex-valued rotate q and k in each head
-        for (int i = 0; i < DIM; i+=2) {
-            int head_dim = i % head_size;
-            float16_t freq = (_Float16)1.0f16 / (_Float16)powf(10000.0f, head_dim / (float)head_size);
-            float16_t val = (_Float16)pos * (_Float16)freq;
-            //T fcr = (T)cosf(val);
-            //T fci = (T)sinf(val);
-            float16_t fcr = (float16_t)arm_cos_f32((float32_t)val);
-            float16_t fci = (float16_t)arm_sin_f32((float32_t)val);
-            int rotn = i < KV_DIM ? 2 : 1; // how many vectors? 2 = q & k, 1 = q only
-            for (int v = 0; v < rotn; v++) {
-                float16_t* vec = v == 0 ? s->q : s->k; // the vector to rotate (query or key)
-                float16_t v0 = vec[i];
-                float16_t v1 = vec[i+1];
-                vec[i]   = (_Float16)v0 * (_Float16)fcr - (_Float16)v1 * (_Float16)fci;
-                vec[i+1] = (_Float16)v0 * (_Float16)fci + (_Float16)v1 * (_Float16)fcr;
-            }
-        }
 
+        for(int k=0;k<N_HEADS;k++)
+        {
+            memcpy(s->cs_cache+k*head_size,w->freq_cos_sin+head_size*pos,head_size*sizeof(float16_t));
+        }
+        arm_cmplx_mult_cmplx_f16(s->cs_cache,s->q ,s->q,DIM>>1);
+        arm_cmplx_mult_cmplx_f16(s->cs_cache,s->k ,s->k,KV_DIM>>1);
+
+        
         // multihead attention. iterate over all heads
         int h;
-        #pragma omp parallel for private(h)
+
         for (h = 0; h < N_HEADS; h++) {
             // get the query vector for this head
             float16_t* q = s->q + h * head_size;
@@ -361,11 +358,6 @@ float16_t* forward(Transformer* transformer, int token, int pos) {
                 float16_t score = 0.0f16;
                 arm_dot_prod_f16(q,k,head_size,&score);
 
-                /*
-                for (int i = 0; i < head_size; i++) {
-                    score += q[i] * k[i];
-                }
-                */
                 score /= (_Float16)sqrtf(head_size);
                 // save the score to the attention buffer
                 att[t] = score;
@@ -394,11 +386,7 @@ float16_t* forward(Transformer* transformer, int token, int pos) {
 
         // residual connection back into x
         arm_add_f16(x,s->xb2,x,DIM);
-        /*
-        for (int i = 0; i < dim; i++) {
-            x[i] += s->xb2[i];
-        }
-        */
+        
 
         // ffn rmsnorm
         arm_rms_norm_f16(s->xb, x, w->rms_ffn_weight[l], DIM);
@@ -417,11 +405,7 @@ float16_t* forward(Transformer* transformer, int token, int pos) {
         // residual connection
 
         arm_add_f16(x,s->xb,x,DIM);
-        /*
-        for (int i = 0; i < dim; i++) {
-            x[i] += s->xb[i];
-        }
-        */
+       
     }
 
     // final rmsnorm
@@ -1165,8 +1149,8 @@ void demo() {
     if (steps < 0) steps = 0;
 
     #if !defined(MPS3)
-      network_mem = load_mem((const char*)"network.dat",(const unsigned char*)0x70000000);
-      tokenizer_mem = load_mem((const char*)"tokenizer.bin",(const unsigned char*)0x71D00000);
+      network_mem = load_mem((const char*)"net.bin",(const unsigned char*)0x70000000);
+      tokenizer_mem = load_mem((const char*)"tok.bin",(const unsigned char*)0x71D00000);
     #else
       network_mem   = (const unsigned char*)0x70000000;
       tokenizer_mem = (const unsigned char*)0x71D00000;

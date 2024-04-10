@@ -81,8 +81,12 @@ shared_classifier = {shared_classifier}
     # final rmsnorm
     append_f16(tensors, model.norm.weight)
     # freqs_cis
-    append_f16(tensors, model.freqs_cos[:p.max_seq_len])
-    append_f16(tensors, model.freqs_sin[:p.max_seq_len])
+    # Interleave cos/sin to be able to use Helium complex instructions
+    s = model.freqs_cos[:p.max_seq_len].shape
+    cs = torch.zeros((s[0],2*s[1]))
+    cs[:,0::2] = model.freqs_cos[:p.max_seq_len]
+    cs[:,1::2] = model.freqs_sin[:p.max_seq_len]
+    append_f16(tensors, cs)
 
     # final classifier weights
     if not shared_classifier:
@@ -94,4 +98,4 @@ shared_classifier = {shared_classifier}
 
 model = load_checkpoint("../../Models/tinyllama/stories15M.pt")
 
-model_export(model,"network.dat")
+model_export(model,"net.bin")
