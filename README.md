@@ -2,9 +2,9 @@
 
 Experiment with ML using Helium f16 instructions. It relies on CMSIS-DSP but a few additional kernels may be provided by this library when not available in CMSIS-DSP.
 
-It is **NOT** a new ML framework. It is just some examples to demonstrate that for small simple networks, CMSIS-DSP may be enough (but requires more work).
+It is **NOT** a new ML framework. It is just some examples to demonstrate that for simple networks, CMSIS-DSP may be enough (but requires more work).
 
-This library is only focusing on float and small kernels with the goal of requiring the minimum of dependencies to run a model.
+This library is only focusing on float and small networks with the goal of requiring the minimum of dependencies to run a model.
 
 If you need quantized kernels and/or use of an Arm NPU for Cortex-M, please use TensorFlow Lite for Micro and CMSIS-NN.
 
