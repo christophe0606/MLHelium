@@ -409,14 +409,7 @@ float16_t* forward(Transformer* transformer, int token, int pos) {
         matmul(s->hb2, s->xb, w->w3[l], DIM, HIDDEN_DIM);
 
         // SwiGLU non-linearity
-        for (int i = 0; i < HIDDEN_DIM; i++) {
-            float16_t val = s->hb[i];
-            // silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-            val *= (_Float16)((_Float16)1.0f16 / (_Float16)((_Float16)1.0f16 + (_Float16)expf((float)-val)));
-            // elementwise multiply with w3(x)
-            val *= (_Float16)(s->hb2[i]);
-            s->hb[i] = val;
-        }
+        arm_swiglu_f16(s->hb, s->hb2,HIDDEN_DIM);
 
         // final matmul to get the output of the ffn
         matmul(s->xb, s->hb, w->w2[l], HIDDEN_DIM, DIM);
@@ -857,29 +850,27 @@ int sample(Sampler* sampler, float16_t* logits) {
 // ----------------------------------------------------------------------------
 // utilities: time
 
-#define INIT_SYSTICK \
- SysTick->CTRL=0;         \
- SysTick->LOAD=0xFFFFFFUL;\
- SysTick->VAL=0;          \
- SysTick->CTRL=5;         \
- while (SysTick->VAL==0)\
-    ; 
-    
+volatile uint32_t nb_sys_tick_round=0;
+#define MAX_SYSTICK 0xFFFFFFUL
 
+extern "C" {
+    void SysTick_Handler(void);
+}
 
+void SysTick_Handler(void)  {                               /* SysTick interrupt Handler. */
+  nb_sys_tick_round++;                                                /* See startup file startup_LPC17xx.s for SysTick vector */ 
+}
+   
 
 extern "C" uint32_t SystemCoreClock;
 
-float time_in_ms() {
-    
 
-    return(1000.0*SysTick->VAL/SystemCoreClock);
+float time_in_ms() {
+    return(1000.0*(MAX_SYSTICK-SysTick->VAL + MAX_SYSTICK * nb_sys_tick_round)/SystemCoreClock);
 }
 
 long time_in_cycles() {
-    
-
-    return(SysTick->VAL);
+    return(MAX_SYSTICK - SysTick->VAL + MAX_SYSTICK * nb_sys_tick_round);
 }
 
 // ----------------------------------------------------------------------------
@@ -915,9 +906,6 @@ int generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, c
 
         // forward the transformer to get logits for the next token
         float16_t* logits = forward(transformer, token, pos);
-        #if defined(STATS)
-        printf("Max vec = %lu\r\n",maxvec);
-        #endif
 
         // advance the state machine
         if (pos < num_prompt_tokens - 1) {
@@ -946,7 +934,8 @@ int generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, c
     // report achieved tok/s (pos-1 because the timer starts after first iteration)
     if (pos > 1) {
         float end = time_in_ms();
-        fprintf(stderr, "achieved tok/s: %f\n", (pos-1) / (double)(end-start)*1000);
+        printf("\r\nduration: %f ms\n", (double)(end-start));
+        printf("\r\nachieved tok/s: %f\n", (pos-1) / (double)(end-start)*1000);
     }
 
     SAFE_FREE(prompt_tokens);
@@ -1116,7 +1105,7 @@ void checkDTCMTime()
     testMemAccess(&mem);
     testMemAccess(&mem);
     long b = time_in_cycles();
-    printf("  Measured cycles %ld\r\n",(a-b)/5);
+    printf("  Measured cycles %ld\r\n",(b-a)/5);
 }
 
 void checkExtMemTime(const void *ptr)
@@ -1129,12 +1118,12 @@ void checkExtMemTime(const void *ptr)
     testMemAccess(ptr);
     testMemAccess(ptr);
     long b = time_in_cycles();
-    printf("  Measured cycles %ld\r\n",(a-b)/5);
+    printf("  Measured cycles %ld\r\n",(b-a)/5);
 }
 
 void checkITCMTime()
 {
-    printf("\r\nCheck ITCM time measurement (should be close to 50 cycles)\r\n");
+    printf("\r\nCheck ITCM time measurement (should be close to 25 cycles on board)\r\n");
     long a = time_in_cycles();
     testITCM();
     testITCM();
@@ -1142,12 +1131,14 @@ void checkITCMTime()
     testITCM();
     testITCM();
     long b = time_in_cycles();
-    printf("  Measured cycles %ld\r\n",(a-b)/5);
+    printf("  Measured cycles %ld\r\n",(b-a)/5);
 }
 
 void demo() {
 
     int error = 0;
+    int systick_status = 0;
+
     #if defined(MPS3)
     stdout_init();
     #endif
@@ -1237,14 +1228,19 @@ void demo() {
     printf("  Heap allocated sampler memory %u bytes (0x%X) \r\n",mem_usage-mem_stat,mem_usage-mem_stat);
     printf("  Internal allocated sampler memory %u bytes (0x%X) \r\n",internal.current_bytes-int_mem_stat,internal.current_bytes-int_mem_stat);
 
-    INIT_SYSTICK;
+
+    printf("\r\nTotal Heap allocated runtime memory %u bytes (0x%X) \r\n",mem_usage,mem_usage);
+    printf("Total Internal allocated memory %u bytes (0x%X) \r\n",internal.current_bytes,internal.current_bytes);
+
+    systick_status = SysTick_Config(MAX_SYSTICK);
+    if (systick_status != 0)
+    {
+        printf("Can't enable SysTick\r\n");
+    }
 
     checkDTCMTime();
     checkExtMemTime((void*)network_mem);
     checkITCMTime();
-
-    printf("\r\nTotal Heap allocated runtime memory %u bytes (0x%X) \r\n",mem_usage,mem_usage);
-    printf("Total Internal allocated memory %u bytes (0x%X) \r\n",internal.current_bytes,internal.current_bytes);
 
     printf("\r\nRunning ...\r\n\r\n");
 
