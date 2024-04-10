@@ -1,3 +1,5 @@
+# Copyright (c) 2023 Andrej
+# Some modification from the original
 import math
 import struct
 import inspect
