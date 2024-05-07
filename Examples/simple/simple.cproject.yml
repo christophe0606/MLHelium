@@ -6,10 +6,14 @@ project:
         - file: demo.cpp
         - file: network.c
         - file: ../../Common/common.c
+        - file: ../../Common/MPS3/GLCD_MPS3.c
+        - file: ../../Common/MPS3/common.c
+        - file: ../../Common/MPS3/fpga.c
    
   add-path:
       - ./
       - ../../Common
+      - ../../Common/MPS3
 
   layers:
     - layer: $Board-Layer$

@@ -70,3 +70,8 @@ There may be some bugs that has been introduced by those changes.
 
 It is an example and not something to use in a product.
 
+## Rebuilding
+
+To rebuild with CMSIS build tools, you must change the variables in the csolution file.
+
+The `DSPPP` variable must be path pointing to the CMSIS-DSP C++ template header files (they are not part of the CMSIS-DSP pack yet so must be got from the github repository of CMSIS-DSP)

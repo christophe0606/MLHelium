@@ -62,6 +62,10 @@ static unsigned char* internal_mem[NB_INT_MEM];
 static memory_area_t internal ;
 
 extern "C" {
+#if defined(MPS3)
+    #include "disp_token.h"
+    #include "Board_GLCD.h"
+#endif
     extern void demo();
 }
 
@@ -517,6 +521,10 @@ char* decode(Tokenizer* t, int prev_token, int token) {
     return piece;
 }
 
+#if defined(MPS3)
+static char msg[256];
+#endif
+
 void safe_printf(char *piece) {
     // piece might be a raw byte token, and we only want to print printable chars or whitespace
     // because some of the other bytes can be various control codes, backspace, etc.
@@ -530,11 +538,19 @@ void safe_printf(char *piece) {
     }
     if ((piece[0]=='\n') && (piece[1]=='\0'))
     {
+#if !defined(MPS3)
        printf("\r\n");
+#else
+       disp_token("\r\n");
+#endif
     }
     else 
     {
+#if !defined(MPS3)
        printf("%s", piece);
+#else
+       disp_token(piece);
+#endif
     }
 }
 
@@ -857,6 +873,7 @@ long time_in_cycles() {
     return(MAX_SYSTICK - SysTick->VAL + MAX_SYSTICK * nb_sys_tick_round);
 }
 
+
 // ----------------------------------------------------------------------------
 // generation loop
 
@@ -920,6 +937,13 @@ int generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, c
         float end = time_in_ms();
         printf("\r\nduration: %f ms\n", (double)(end-start));
         printf("\r\nachieved tok/s: %f\n", (pos-1) / (double)(end-start)*1000);
+#if defined(MPS3)
+        sprintf(msg,"\r\n\nduration: %f ms\r\n", (double)(end-start));
+        disp_token(msg);
+        sprintf(msg,"achieved tok/s: %f\r\n", (pos-1) / (double)(end-start)*1000);
+        disp_token(msg);
+#endif
+
     }
 
     SAFE_FREE(prompt_tokens);
@@ -1129,6 +1153,17 @@ void demo() {
 
     SCB_EnableICache();
     SCB_EnableDCache();
+
+#if defined(MPS3)
+    GLCD_Initialize();
+    //GLCD_WindowMax();
+    GLCD_SetBackgroundColor(LightGrey);
+    GLCD_SetForegroundColor(Black);
+    GLCD_SetTextBackgroundColor(LightGrey);
+    GLCD_SetTextForegroundColor(Black);
+    GLCD_ClearScreen();
+    GLCD_SetFontID(kFont16x24);
+#endif
 
     const unsigned char *network_mem;
     const unsigned char *tokenizer_mem;

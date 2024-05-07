@@ -4,11 +4,16 @@ project:
     - group: App
       files:
         - file: demo.cpp
+        - file: disp_token.c
         - file: ../../Common/common.c
-   
+        - file: ../../Common/common.c
+        - file: ../../Common/MPS3_ARM2D/GLCD_V2M-MPS3_AN552.c
+        - file: ../../Common/MPS3_ARM2D/GLCD_Fonts.c
+
   add-path:
       - ./
       - ../../Common
+      - ../../Common/MPS3_ARM2D
       - $DSPPP$
 
   layers:

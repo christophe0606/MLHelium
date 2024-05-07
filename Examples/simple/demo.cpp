@@ -22,6 +22,7 @@
 #include <cstdio>
 
 extern "C" {
+    #include "GLCD_MPS3.h"
     extern void demo();
 }
 
@@ -36,8 +37,16 @@ extern "C" {
 __ALIGNED(16)
 float32_t internal_ta[TA_LEN];
 
+
+
 void demo() 
 {
+   GLCD_Initialize();
+   GLCD_WindowMax();
+   GLCD_Clear(Black);
+   GLCD_SetTextColor(White);
+   GLCD_SetBackColor(Black);
+   disp  ("012345678901234567890123456789");
    /* Read first tensor from network description */
    float32_t *ta = get_f32_tensor(network,TA_ID);
    printf("TA\r\n");
