@@ -4,6 +4,8 @@ project:
     - group: App
       files:
         - file: demo.cpp
+        - file: model_f16.cpp
+        - file: memory.cpp
         - file: disp_token.c
         - file: ../../Common/common.c
         - file: ../../Common/common.c

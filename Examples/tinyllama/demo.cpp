@@ -33,33 +33,13 @@
 #include <iostream>
 #include <fstream>
 
-#include "dsp/matrix_functions_f16.h"
-#include "dsp/basic_math_functions_f16.h"
-#include "dsp/complex_math_functions_f16.h"
-#include "dsp/fast_math_functions_f16.h"
-
 
 #include "kernels.h"
 
-#define DIM 288
-#define HIDDEN_DIM 768
-#define N_LAYERS 6
-#define N_HEADS 6
-#define N_KV_HEADS 6
-#define VOCAB_SIZE 32000
-#define MAX_SEQ_LEN 256
-#define SHARED_WEIGHTS 1
+#include "model.h"
+#include "memory.h"
+#include "model_f16.h"
 
-#define KV_DIM ((DIM * N_KV_HEADS) / N_HEADS)
-
-/*
-
-Internal memory for some part of the transformer state
-
-*/
-#define NB_INT_MEM ((DIM+N_HEADS * MAX_SEQ_LEN + VOCAB_SIZE + 4*DIM+2*HIDDEN_DIM)*sizeof(float16_t))
-static unsigned char* internal_mem[NB_INT_MEM];
-static memory_area_t internal ;
 
 extern "C" {
 #if defined(MPS3)
@@ -69,224 +49,11 @@ extern "C" {
     extern void demo();
 }
 
-#define SAFE_FREE(x)\
-  if ((x))          \
-  {                 \
-     free((x));     \
-  }
 
-static uint32_t mem_usage = 0;
 
-void * ml_calloc( size_t elementCount, size_t elementSize )
-{
-    mem_usage += elementCount * elementSize;
-    return(calloc(elementCount,elementSize));
-}
 
-void * ml_malloc( size_t bytes )
-{
-    mem_usage += bytes;
-    return(malloc(bytes));
-}
 
-void * ml_aligned_calloc( size_t elementCount, size_t elementSize )
-{
-    size_t allocated_memory;
-    void* res = aligned_malloc(8, elementCount*elementSize,&allocated_memory);
 
-    mem_usage += allocated_memory;
-    return(res);
-}
-
-void * ml_aligned_malloc( size_t bytes )
-{
-    size_t allocated_memory;
-    void* res = aligned_malloc(8, bytes,&allocated_memory);
-
-    mem_usage += allocated_memory;
-    return(res);
-}
-
-// ----------------------------------------------------------------------------
-// Transformer model
-
-struct TransformerWeights {
-    // token embedding table
-    float16_t* token_embedding_table;    // (vocab_size, dim)
-    // weights for rmsnorms
-    float16_t* rms_att_weight[N_LAYERS]; // (layer, dim) rmsnorm weights
-    float16_t* rms_ffn_weight[N_LAYERS]; // (layer, dim)
-    // weights for matmuls. note dim == n_heads * head_size
-    float16_t* wq[N_LAYERS]; // (layer, dim, n_heads * head_size)
-    float16_t* wk[N_LAYERS]; // (layer, dim, n_kv_heads * head_size)
-    float16_t* wv[N_LAYERS]; // (layer, dim, n_kv_heads * head_size)
-    float16_t* wo[N_LAYERS]; // (layer, n_heads * head_size, dim)
-    // weights for ffn
-    float16_t* w1[N_LAYERS]; // (layer, hidden_dim, dim)
-    float16_t* w2[N_LAYERS]; // (layer, dim, hidden_dim)
-    float16_t* w3[N_LAYERS]; // (layer, hidden_dim, dim)
-    // final rmsnorm
-    float16_t* rms_final_weight; // (dim,)
-    // (optional) classifier weights for the logits, on the last layer
-    float16_t* wcls;
-
-    // Precomputed sin and cos frequencies
-    // cos sin interleaved
-    float16_t *freq_cos_sin;
-
-} ;
-
-struct RunState {
-    // current wave of activations
-    float16_t* x; // activation at current time stamp (dim,)
-    float16_t* xb; // same, but inside a residual branch (dim,)
-    float16_t* xb2; // an additional buffer just for convenience (dim,)
-    float16_t* hb; // buffer for hidden dimension in the ffn (hidden_dim,)
-    float16_t* hb2; // buffer for hidden dimension in the ffn (hidden_dim,)
-    float16_t* q; // query (dim,)
-    float16_t* k; // key (dim,)
-    float16_t* v; // value (dim,)
-    float16_t* att; // buffer for scores/attention values (n_heads, seq_len)
-    float16_t* logits; // output logits
-    // kv cache
-    float16_t* key_cache;   // (layer, seq_len, dim)
-    float16_t* value_cache; // (layer, seq_len, dim)
-
-    // cos_sin cache 
-    float16_t *cs_cache;
-} ;
-
-struct Transformer {
-    TransformerWeights weights; // the weights of the model
-    RunState state; // buffers for the "wave" of activations in the forward pass
-} ;
-
-int malloc_run_state(RunState* s) {
-
-    
-    s->x = (float16_t*)add_aligned_buffer_to_area(&internal,DIM*sizeof(float16_t),8);
-    s->xb = (float16_t*)add_aligned_buffer_to_area(&internal,DIM*sizeof(float16_t),8);
-    s->xb2 = (float16_t*)add_aligned_buffer_to_area(&internal,DIM*sizeof(float16_t),8);
-
-    
-    s->hb = (float16_t*)add_aligned_buffer_to_area(&internal,HIDDEN_DIM*sizeof(float16_t),8);
-    s->hb2 = (float16_t*)add_aligned_buffer_to_area(&internal,HIDDEN_DIM*sizeof(float16_t),8);
-
-    s->q = (float16_t*)add_aligned_buffer_to_area(&internal,DIM*sizeof(float16_t),8);
-
-    // Caches are too big for internal memory so they are
-    // allocated in the external heap
-    s->key_cache = (float16_t*)ml_aligned_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(float16_t));
-    s->value_cache = (float16_t*)ml_aligned_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(float16_t));
-    
-    s->att = (float16_t*)add_aligned_buffer_to_area(&internal,N_HEADS * MAX_SEQ_LEN*sizeof(float16_t),8);
-
-    s->logits = (float16_t*)add_aligned_buffer_to_area(&internal,VOCAB_SIZE*sizeof(float16_t),8);
-
-    s->cs_cache = (float16_t*)add_aligned_buffer_to_area(&internal,DIM*sizeof(float16_t),8);
-
-    // ensure all mallocs went fine
-    if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q
-     || !s->key_cache || !s->value_cache || !s->att || !s->logits
-     || !s->cs_cache) {
-        return(kErrorAllocRunState);
-    }
-    return(kNoError);
-}
-
-void free_run_state(RunState* s) {
-    if (!s)
-    {
-        return;
-    }
-    // Using internal memory so no need to be released
-    //aligned_free(s->x);
-    //aligned_free(s->xb);
-    //aligned_free(s->xb2);
-    //aligned_free(s->hb);
-    //aligned_free(s->hb2);
-    //aligned_free(s->q);
-    //aligned_free(s->att);
-    //aligned_free(s->logits);
-    aligned_free(s->key_cache);
-    aligned_free(s->value_cache);
-}
-
-void memory_map_weights(TransformerWeights *w, const unsigned char* ptr) {
-    // Get pointer to the weights inside the memory mapped network
-    int ID = 0;
-    w->token_embedding_table = get_f16_tensor(ptr,ID++);
-    for(int l=0;l < N_LAYERS; l++)
-    {
-       w->rms_att_weight[l] = get_f16_tensor(ptr,ID++);
-    }
-    for(int l=0;l < N_LAYERS; l++)
-    {
-       w->wq[l] = get_f16_tensor(ptr,ID++);
-    }
-    for(int l=0;l < N_LAYERS; l++)
-    {
-       w->wk[l] = get_f16_tensor(ptr,ID++);
-    }
-    for(int l=0;l < N_LAYERS; l++)
-    {
-       w->wv[l] = get_f16_tensor(ptr,ID++);
-    }
-    for(int l=0;l < N_LAYERS; l++)
-    {
-       w->wo[l] = get_f16_tensor(ptr,ID++);
-    }
-    for(int l=0;l < N_LAYERS; l++)
-    {
-       w->rms_ffn_weight[l] = get_f16_tensor(ptr,ID++);
-    }
-
-    for(int l=0;l < N_LAYERS; l++)
-    {
-       w->w1[l] = get_f16_tensor(ptr,ID++);
-    }
-    for(int l=0;l < N_LAYERS; l++)
-    {
-       w->w2[l] = get_f16_tensor(ptr,ID++);
-    }
-    for(int l=0;l < N_LAYERS; l++)
-    {
-       w->w3[l] = get_f16_tensor(ptr,ID++);
-    }
-    
-    w->rms_final_weight = get_f16_tensor(ptr,ID++);
-
-    w->freq_cos_sin = get_f16_tensor(ptr,ID++);
-
-    w->wcls = SHARED_WEIGHTS ? w->token_embedding_table : get_f16_tensor(ptr,ID++);
-}
-
-int read_checkpoint(const unsigned char* memory, TransformerWeights* weights) {
-    if (!memory) { 
-        return(kNoMemoryBufferForCheckpoint); 
-    }
-    
-
-    memory_map_weights(weights, memory);
-    return(kNoError);
-}
-
-int build_transformer(Transformer *t, const unsigned char* memory) {
-    // read in the Config and the Weights from the checkpoint
-    int err = read_checkpoint(memory, &t->weights);
-    if (err!=kNoError)
-    {
-        return(err);
-    }
-    // allocate the RunState buffers
-    err = malloc_run_state(&t->state);
-    return(err);
-}
-
-void free_transformer(Transformer* t) {
-    // free the RunState buffers
-    free_run_state(&t->state);
-}
 
 // ----------------------------------------------------------------------------
 // neural net blocks; the dynamics of the Transformer
@@ -294,131 +61,7 @@ void free_transformer(Transformer* t) {
 
 
 
-void matmul(float16_t* xout, float16_t* x, float16_t* w, int cols, int rows) {
-    arm_matrix_instance_f16 W;
-    W.numRows = rows;
-    W.numCols = cols;
-    W.pData = w;
 
-
-   
-    arm_mat_vec_mult_f16(&W,x,xout);
-
-}
-
-
-float16_t* forward(Transformer* transformer, int token, int pos) {
-
-    // a few convenience variables
-    TransformerWeights* w = &transformer->weights;
-    RunState* s = &transformer->state;
-    float16_t *x = s->x;
-    int kv_mul = N_HEADS / N_KV_HEADS; // integer multiplier of the kv sharing in multiquery
-    int head_size = DIM / N_HEADS;
-
-    // copy the token embedding into x
-    float16_t* content_row = w->token_embedding_table + token * DIM;
-    memcpy(x, content_row, DIM*sizeof(float16_t));
-
-    // forward all the layers
-    for(int l = 0; l < N_LAYERS; l++) {
-
-        // attention rmsnorm
-        arm_rms_norm_f16(s->xb, x, w->rms_att_weight[l], DIM);
-
-        // key and value point to the kv cache
-        int loff = l * MAX_SEQ_LEN * KV_DIM; // kv cache layer offset for convenience
-        s->k = s->key_cache + loff + pos * KV_DIM;
-        s->v = s->value_cache + loff + pos * KV_DIM;
-
-        // qkv matmuls for this position
-        matmul(s->q, s->xb, w->wq[l], DIM, DIM);
-        matmul(s->k, s->xb, w->wk[l], DIM, KV_DIM);
-        matmul(s->v, s->xb, w->wv[l], DIM, KV_DIM);
-
-        // RoPE relative positional encoding: complex-valued rotate q and k in each head
-
-        for(int k=0;k<N_HEADS;k++)
-        {
-            memcpy(s->cs_cache+k*head_size,w->freq_cos_sin+head_size*pos,head_size*sizeof(float16_t));
-        }
-        arm_cmplx_mult_cmplx_f16(s->cs_cache,s->q ,s->q,DIM>>1);
-        arm_cmplx_mult_cmplx_f16(s->cs_cache,s->k ,s->k,KV_DIM>>1);
-
-        
-        // multihead attention. iterate over all heads
-        int h;
-
-        for (h = 0; h < N_HEADS; h++) {
-            // get the query vector for this head
-            float16_t* q = s->q + h * head_size;
-            // attention scores for this head
-            float16_t* att = s->att + h * MAX_SEQ_LEN;
-            // iterate over all timesteps, including the current one
-            for (int t = 0; t <= pos; t++) {
-                // get the key vector for this head and at this timestep
-                float16_t* k = s->key_cache + loff + t * KV_DIM + (h / kv_mul) * head_size;
-                // calculate the attention score as the dot product of q and k
-                float16_t score = 0.0f16;
-                arm_dot_prod_f16(q,k,head_size,&score);
-
-                score /= (_Float16)sqrtf(head_size);
-                // save the score to the attention buffer
-                att[t] = score;
-            }
-
-            // softmax the scores to get attention weights, from 0..pos inclusively
-            arm_softmax_f16(att, pos + 1);
-
-            // weighted sum of the values, store back into xb
-            float16_t* xb = s->xb + h * head_size;
-            memset(xb, 0, head_size * sizeof(float16_t));
-            for (int t = 0; t <= pos; t++) {
-                // get the value vector for this head and at this timestep
-                float16_t* v = s->value_cache + loff + t * KV_DIM + (h / kv_mul) * head_size;
-                // get the attention weight for this timestep
-                float16_t a = att[t];
-                // accumulate the weighted value into xb
-                for (int i = 0; i < head_size; i++) {
-                    xb[i] += (_Float16)a * (_Float16)v[i];
-                }
-            }
-        }
-
-        // final matmul to get the output of the attention
-        matmul(s->xb2, s->xb, w->wo[l], DIM, DIM);
-
-        // residual connection back into x
-        arm_add_f16(x,s->xb2,x,DIM);
-        
-
-        // ffn rmsnorm
-        arm_rms_norm_f16(s->xb, x, w->rms_ffn_weight[l], DIM);
-
-        // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
-        // first calculate self.w1(x) and self.w3(x)
-        matmul(s->hb, s->xb, w->w1[l], DIM, HIDDEN_DIM);
-        matmul(s->hb2, s->xb, w->w3[l], DIM, HIDDEN_DIM);
-
-        // SwiGLU non-linearity
-        arm_swiglu_f16(s->hb, s->hb2,HIDDEN_DIM);
-
-        // final matmul to get the output of the ffn
-        matmul(s->xb, s->hb, w->w2[l], HIDDEN_DIM, DIM);
-
-        // residual connection
-
-        arm_add_f16(x,s->xb,x,DIM);
-       
-    }
-
-    // final rmsnorm
-    arm_rms_norm_f16(x, x, w->rms_final_weight, DIM);
-
-    // classifier into logits
-    matmul(s->logits, x, w->wcls, DIM, VOCAB_SIZE);
-    return (s->logits);
-}
 
 // ----------------------------------------------------------------------------
 // The Byte Pair Encoding (BPE) Tokenizer that translates strings <-> tokens
@@ -1197,15 +840,14 @@ void demo() {
         return;
     }
 
-    init_memory_area(&internal,(unsigned char*)internal_mem,NB_INT_MEM);
 
     printf("\r\nBuild transformer\r\n");
 
     // build the Transformer via the model .bin file
     Transformer transformer;
 
-    uint32_t mem_stat = mem_usage;
-    uint32_t int_mem_stat = internal.current_bytes;
+    uint32_t mem_stat = get_mem_usage();
+    uint32_t int_mem_stat = get_internal_current_bytes();
 
     error = build_transformer(&transformer, network_mem);
     if (error != kNoError)
@@ -1214,42 +856,42 @@ void demo() {
     }
     if (steps == 0 || steps > MAX_SEQ_LEN) steps = MAX_SEQ_LEN; // override to ~max length
 
-    printf("  Heap allocated transformer memory %u bytes (0x%X) \r\n",mem_usage-mem_stat,mem_usage-mem_stat);
-    printf("  Internal allocated transformer memory %u bytes (0x%X) \r\n",internal.current_bytes-int_mem_stat,internal.current_bytes-int_mem_stat);
+    printf("  Heap allocated transformer memory %u bytes (0x%X) \r\n",get_mem_usage()-mem_stat,get_mem_usage()-mem_stat);
+    printf("  Internal allocated transformer memory %u bytes (0x%X) \r\n",get_internal_current_bytes()-int_mem_stat,get_internal_current_bytes()-int_mem_stat);
 
 
     printf("\r\nBuild tokenizer\r\n");
     // build the Tokenizer via the tokenizer .bin file
     Tokenizer tokenizer;
 
-    mem_stat = mem_usage;
-    int_mem_stat = internal.current_bytes;
+    mem_stat = get_mem_usage();
+    int_mem_stat = get_internal_current_bytes();
     error = build_tokenizer(&tokenizer, tokenizer_mem, VOCAB_SIZE);
     if (error != kNoError)
     {
         goto error;
     }
 
-    printf("  Heap allocated tokenizer memory %u bytes (0x%X) \r\n",mem_usage-mem_stat,mem_usage-mem_stat);
-    printf("  Internal allocated tokenizer memory %u bytes (0x%X) \r\n",internal.current_bytes-int_mem_stat,internal.current_bytes-int_mem_stat);
+    printf("  Heap allocated tokenizer memory %u bytes (0x%X) \r\n",get_mem_usage()-mem_stat,get_mem_usage()-mem_stat);
+    printf("  Internal allocated tokenizer memory %u bytes (0x%X) \r\n",get_internal_current_bytes()-int_mem_stat,get_internal_current_bytes()-int_mem_stat);
 
 
     // build the Sampler
     printf("\r\nBuild sampler\r\n");
-    mem_stat = mem_usage;
-    int_mem_stat = internal.current_bytes;
+    mem_stat = get_mem_usage();
+    int_mem_stat = get_internal_current_bytes();
     Sampler sampler;
     error = build_sampler(&sampler, VOCAB_SIZE, temperature, topp, rng_seed);
     if (error != kNoError)
     {
         goto error;
     }
-    printf("  Heap allocated sampler memory %u bytes (0x%X) \r\n",mem_usage-mem_stat,mem_usage-mem_stat);
-    printf("  Internal allocated sampler memory %u bytes (0x%X) \r\n",internal.current_bytes-int_mem_stat,internal.current_bytes-int_mem_stat);
+    printf("  Heap allocated sampler memory %u bytes (0x%X) \r\n",get_mem_usage()-mem_stat,get_mem_usage()-mem_stat);
+    printf("  Internal allocated sampler memory %u bytes (0x%X) \r\n",get_internal_current_bytes()-int_mem_stat,get_internal_current_bytes()-int_mem_stat);
 
 
-    printf("\r\nTotal Heap allocated runtime memory %u bytes (0x%X) \r\n",mem_usage,mem_usage);
-    printf("Total Internal allocated memory %u bytes (0x%X) \r\n",internal.current_bytes,internal.current_bytes);
+    printf("\r\nTotal Heap allocated runtime memory %u bytes (0x%X) \r\n",get_mem_usage(),get_mem_usage());
+    printf("Total Internal allocated memory %u bytes (0x%X) \r\n",get_internal_current_bytes(),get_internal_current_bytes());
 
     systick_status = SysTick_Config(MAX_SYSTICK);
     if (systick_status != 0)
@@ -1278,7 +920,7 @@ error:
    free_transformer(&transformer);
    if (error!=0)
    {
-      printf("An error occured %d. Allocated memory %u bytes (0x%X)\r\n",error,mem_usage,mem_usage);
+      printf("An error occured %d. Allocated memory %u bytes (0x%X)\r\n",error,get_mem_usage(),get_mem_usage());
    }  
 }
 

@@ -10,7 +10,7 @@ layer:
 
   packs:
     - pack: ARM::CMSIS@6.0.0
-    - pack: ARM::CMSIS-DSP@1.15.0
+    - pack: ARM::CMSIS-DSP@1.16.2
     - pack: ARM::V2M_MPS3_SSE_300_BSP@1.4.0
     - pack: ARM::CMSIS-Compiler@2.0.0
     - pack: ARM::Cortex_DFP@1.0.0
@@ -28,7 +28,7 @@ layer:
 
   components:
     - component: ARM::CMSIS:CORE
-    - component: ARM::CMSIS:DSP@1.15.0
+    - component: ARM::CMSIS:DSP
     - component: ARM::Device:Startup&C Startup
     - component: ARM::Device:Definition
     - component: CMSIS-Compiler:CORE
