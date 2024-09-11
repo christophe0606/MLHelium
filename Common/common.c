@@ -41,6 +41,43 @@ float32_t* get_f32_tensor(const unsigned char *network,
    return((float32_t*)(network+offset));
 }
 
+/**
+ * @brief      Gets the f8 tensor pointer.
+ *
+ * @param[in]  network    The network description
+ * @param[in]  tensor_nb  The tensor number
+ *
+ * @return     The pointer to the f8 tensor
+ * 
+ * @par        float8 format
+ *             Format with 2 bit of mantissa
+ */
+float8_t *get_f8_tensor(const unsigned char *network,
+                        const int tensor_nb)
+{
+   const uint32_t *tensors = (const uint32_t *)network;
+   const uint32_t offset = tensors[TENSOR_OFFSET_POS(tensor_nb)];
+   return((float8_t*)(network+offset));
+}
+
+/**
+ * @brief      Gets the i8 tensor pointer.
+ *
+ * @param[in]  network    The network description
+ * @param[in]  tensor_nb  The tensor number
+ *
+ * @return     The pointer to the i8 tensor
+ * 
+ * @par        int8 format
+ */
+int8_t *get_i8_tensor(const unsigned char *network,
+                        const int tensor_nb)
+{
+   const uint32_t *tensors = (const uint32_t *)network;
+   const uint32_t offset = tensors[TENSOR_OFFSET_POS(tensor_nb)];
+   return((int8_t*)(network+offset));
+}
+
 #if defined(ARM_FLOAT16_SUPPORTED)
 /**
  * @brief      Gets the f16 tensor pointer.
@@ -121,6 +158,11 @@ void sub_copy_tensor(unsigned char *dst,
 void* aligned_malloc(size_t alignment, size_t size,size_t *allocated_memory)
 {
    void *ptr=malloc(size+alignment+sizeof(void*));
+   if (!ptr)
+   {
+      *allocated_memory = 0;
+      return(NULL);
+   }
    *allocated_memory = size+alignment+sizeof(void*);
    void *aligned = (char*)(((size_t)(ptr)+sizeof(void*)+alignment) & ~(alignment-1));
 

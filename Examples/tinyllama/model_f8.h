@@ -1,37 +1,39 @@
 #pragma once
 
 #include "arm_math_types_f16.h"
+// Define float8 datatype
+#include "common.h"
 
 #define FLOAT_TYPE float16_t
 #define MAX_VEC arm_max_f16
 #define SOFTMAX arm_softmax_f16
 
 // ----------------------------------------------------------------------------
-// Transformer model
+// Transformer model with float8 heights
 
 struct TransformerWeights {
     // token embedding table
-    float16_t* token_embedding_table;    // (vocab_size, dim)
+    float8_t* token_embedding_table;    // (vocab_size, dim)
     // weights for rmsnorms
-    float16_t* rms_att_weight[N_LAYERS]; // (layer, dim) rmsnorm weights
-    float16_t* rms_ffn_weight[N_LAYERS]; // (layer, dim)
+    float8_t* rms_att_weight[N_LAYERS]; // (layer, dim) rmsnorm weights
+    float8_t* rms_ffn_weight[N_LAYERS]; // (layer, dim)
     // weights for matmuls. note dim == n_heads * head_size
-    float16_t* wq[N_LAYERS]; // (layer, dim, n_heads * head_size)
-    float16_t* wk[N_LAYERS]; // (layer, dim, n_kv_heads * head_size)
-    float16_t* wv[N_LAYERS]; // (layer, dim, n_kv_heads * head_size)
-    float16_t* wo[N_LAYERS]; // (layer, n_heads * head_size, dim)
+    float8_t* wq[N_LAYERS]; // (layer, dim, n_heads * head_size)
+    float8_t* wk[N_LAYERS]; // (layer, dim, n_kv_heads * head_size)
+    float8_t* wv[N_LAYERS]; // (layer, dim, n_kv_heads * head_size)
+    float8_t* wo[N_LAYERS]; // (layer, n_heads * head_size, dim)
     // weights for ffn
-    float16_t* w1[N_LAYERS]; // (layer, hidden_dim, dim)
-    float16_t* w2[N_LAYERS]; // (layer, dim, hidden_dim)
-    float16_t* w3[N_LAYERS]; // (layer, hidden_dim, dim)
+    float8_t* w1[N_LAYERS]; // (layer, hidden_dim, dim)
+    float8_t* w2[N_LAYERS]; // (layer, dim, hidden_dim)
+    float8_t* w3[N_LAYERS]; // (layer, hidden_dim, dim)
     // final rmsnorm
-    float16_t* rms_final_weight; // (dim,)
+    float8_t* rms_final_weight; // (dim,)
     // (optional) classifier weights for the logits, on the last layer
-    float16_t* wcls;
+    float8_t* wcls;
 
     // Precomputed sin and cos frequencies
     // cos sin interleaved
-    float16_t *freq_cos_sin;
+    float8_t *freq_cos_sin;
 
 } ;
 
@@ -64,3 +66,4 @@ extern size_t get_internal_current_bytes();
 extern void free_transformer(Transformer* t);
 extern int build_transformer(Transformer *t, const unsigned char* memory);
 extern float16_t* forward(Transformer* transformer, int token, int pos);
+

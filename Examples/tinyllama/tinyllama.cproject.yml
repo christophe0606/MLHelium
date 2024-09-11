@@ -5,12 +5,17 @@ project:
       files:
         - file: demo.cpp
         - file: model_f16.cpp
+        - file: model_f8.cpp
+        - file: model_i8.cpp
         - file: memory.cpp
         - file: disp_token.c
         - file: ../../Common/common.c
         - file: ../../Common/common.c
         - file: ../../Common/MPS3_ARM2D/GLCD_V2M-MPS3_AN552.c
         - file: ../../Common/MPS3_ARM2D/GLCD_Fonts.c
+      define:
+      #  - WEIGHT_F8
+         - WEIGHT_I8
 
   add-path:
       - ./

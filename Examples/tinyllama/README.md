@@ -13,7 +13,7 @@ You first must get the network checkpoint from Huggingface and the Tokenizer fro
 wget -O ../Models/tinyllama/stories15M.pt https://huggingface.co/karpathy/tinyllamas/resolve/main/stories15M.pt?download=true 
 
 # Get the tokenizer from https://github.com/karpathy/llama2.c
-wget -O tok.bin https://github.com/4bbec843-d0db-4c21-a977-096c983faab7
+wget -O tok.bin https://github.com/karpathy/llama2.c/raw/master/tokenizer.bin
 ```
 
 The network must then be converted to f16 and serialized in a data format developed for those examples (simple and with buffer alignements):

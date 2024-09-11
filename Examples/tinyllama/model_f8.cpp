@@ -1,4 +1,4 @@
-#if !defined(WEIGHT_F8) && !defined(WEIGHT_I8)
+#if defined(WEIGHT_F8)
 #include "model.h"
 
 #include "dsp/matrix_functions_f16.h"
@@ -6,7 +6,7 @@
 #include "dsp/complex_math_functions_f16.h"
 #include "dsp/fast_math_functions_f16.h"
 
-#include "model_f16.h"
+#include "model_f8.h"
 
 #include "common.h"
 #include "memory.h"
@@ -81,50 +81,50 @@ static void free_run_state(RunState* s) {
 static void memory_map_weights(TransformerWeights *w, const unsigned char* ptr) {
     // Get pointer to the weights inside the memory mapped network
     int ID = 0;
-    w->token_embedding_table = get_f16_tensor(ptr,ID++);
+    w->token_embedding_table = get_f8_tensor(ptr,ID++);
     for(int l=0;l < N_LAYERS; l++)
     {
-       w->rms_att_weight[l] = get_f16_tensor(ptr,ID++);
+       w->rms_att_weight[l] = get_f8_tensor(ptr,ID++);
     }
     for(int l=0;l < N_LAYERS; l++)
     {
-       w->wq[l] = get_f16_tensor(ptr,ID++);
+       w->wq[l] = get_f8_tensor(ptr,ID++);
     }
     for(int l=0;l < N_LAYERS; l++)
     {
-       w->wk[l] = get_f16_tensor(ptr,ID++);
+       w->wk[l] = get_f8_tensor(ptr,ID++);
     }
     for(int l=0;l < N_LAYERS; l++)
     {
-       w->wv[l] = get_f16_tensor(ptr,ID++);
+       w->wv[l] = get_f8_tensor(ptr,ID++);
     }
     for(int l=0;l < N_LAYERS; l++)
     {
-       w->wo[l] = get_f16_tensor(ptr,ID++);
+       w->wo[l] = get_f8_tensor(ptr,ID++);
     }
     for(int l=0;l < N_LAYERS; l++)
     {
-       w->rms_ffn_weight[l] = get_f16_tensor(ptr,ID++);
+       w->rms_ffn_weight[l] = get_f8_tensor(ptr,ID++);
     }
 
     for(int l=0;l < N_LAYERS; l++)
     {
-       w->w1[l] = get_f16_tensor(ptr,ID++);
+       w->w1[l] = get_f8_tensor(ptr,ID++);
     }
     for(int l=0;l < N_LAYERS; l++)
     {
-       w->w2[l] = get_f16_tensor(ptr,ID++);
+       w->w2[l] = get_f8_tensor(ptr,ID++);
     }
     for(int l=0;l < N_LAYERS; l++)
     {
-       w->w3[l] = get_f16_tensor(ptr,ID++);
+       w->w3[l] = get_f8_tensor(ptr,ID++);
     }
     
-    w->rms_final_weight = get_f16_tensor(ptr,ID++);
+    w->rms_final_weight = get_f8_tensor(ptr,ID++);
 
-    w->freq_cos_sin = get_f16_tensor(ptr,ID++);
+    w->freq_cos_sin = get_f8_tensor(ptr,ID++);
 
-    w->wcls = SHARED_WEIGHTS ? w->token_embedding_table : get_f16_tensor(ptr,ID++);
+    w->wcls = SHARED_WEIGHTS ? w->token_embedding_table : get_f8_tensor(ptr,ID++);
 }
 
 static int read_checkpoint(const unsigned char* memory, TransformerWeights* weights) {
@@ -157,15 +157,15 @@ void free_transformer(Transformer* t) {
 }
 
 
-static void matmul(float16_t* xout, float16_t* x, float16_t* w, int cols, int rows) {
-    arm_matrix_instance_f16 W;
+static void matmul(float16_t* xout, float16_t* x, float8_t* w, int cols, int rows) {
+    arm_matrix_instance_f8 W;
     W.numRows = rows;
     W.numCols = cols;
     W.pData = w;
 
 
    
-    arm_mat_vec_mult_f16(&W,x,xout);
+    arm_mat_vec_mult_f8_f16(&W,x,xout);
 
 }
 
@@ -180,14 +180,14 @@ float16_t* forward(Transformer* transformer, int token, int pos) {
     int head_size = DIM / N_HEADS;
 
     // copy the token embedding into x
-    float16_t* content_row = w->token_embedding_table + token * DIM;
-    memcpy(x, content_row, DIM*sizeof(float16_t));
+    float8_t* content_row = w->token_embedding_table + token * DIM;
+    arm_copy_f8_to_f16(x, content_row, DIM);
 
     // forward all the layers
     for(int l = 0; l < N_LAYERS; l++) {
 
         // attention rmsnorm
-        arm_rms_norm_f16(s->xb, x, w->rms_att_weight[l], DIM);
+        arm_rms_norm_f8_f16(s->xb, x, w->rms_att_weight[l], DIM);
 
         // key and value point to the kv cache
         int loff = l * MAX_SEQ_LEN * KV_DIM; // kv cache layer offset for convenience
@@ -256,7 +256,7 @@ float16_t* forward(Transformer* transformer, int token, int pos) {
         
 
         // ffn rmsnorm
-        arm_rms_norm_f16(s->xb, x, w->rms_ffn_weight[l], DIM);
+        arm_rms_norm_f8_f16(s->xb, x, w->rms_ffn_weight[l], DIM);
 
         // Now for FFN in PyTorch we have: self.w2(F.silu(self.w1(x)) * self.w3(x))
         // first calculate self.w1(x) and self.w3(x)
@@ -276,7 +276,7 @@ float16_t* forward(Transformer* transformer, int token, int pos) {
     }
 
     // final rmsnorm
-    arm_rms_norm_f16(x, x, w->rms_final_weight, DIM);
+    arm_rms_norm_f8_f16(x, x, w->rms_final_weight, DIM);
 
     // classifier into logits
     matmul(s->logits, x, w->wcls, DIM, VOCAB_SIZE);

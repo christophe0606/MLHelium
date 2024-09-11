@@ -37,8 +37,19 @@
 #include "kernels.h"
 
 #include "model.h"
-#include "memory.h"
+
+#if defined(WEIGHT_F8)
+#include "model_f8.h"
+#elif defined(WEIGHT_I8)
+#include "model_i8.h"
+#else
 #include "model_f16.h"
+#endif
+
+#include "memory.h"
+
+#include "dsp/statistics_functions_f16.h"
+#include "dsp/statistics_functions.h"
 
 
 extern "C" {
@@ -99,7 +110,15 @@ int build_tokenizer(Tokenizer* t, const unsigned char* memory, int vocab_size) {
     t->vocab_size = vocab_size;
     // malloc space to hold the scores and the strings
     t->vocab = (char**)ml_malloc(vocab_size * sizeof(char*));
+    if (!t->vocab)
+    {
+        printf("Error alloc vocab\r\n");
+    }
     t->vocab_scores = (float*)ml_malloc(vocab_size * sizeof(float));
+    if (!t->vocab_scores)
+    {
+        printf("Error alloc vocab scores\r\n");
+    }
     if (!t->vocab || !t->vocab_scores)
     {
         return(kErrorBuildTokenizer);
@@ -355,20 +374,15 @@ struct Sampler {
     unsigned long long rng_state;
 } ;
 
-int sample_argmax(float16_t* probabilities, int n) {
-    // return the index that has the highest probability
-    int max_i = 0;
-    float max_p = probabilities[0];
-    for (int i = 1; i < n; i++) {
-        if (probabilities[i] > max_p) {
-            max_i = i;
-            max_p = probabilities[i];
-        }
-    }
-    return max_i;
+int sample_argmax(FLOAT_TYPE* probabilities, int n) {
+    FLOAT_TYPE max_p;
+    uint32_t max_i;
+
+    MAX_VEC(probabilities,n,&max_p,&max_i);
+    return (max_i);
 }
 
-int sample_mult(float16_t* probabilities, int n, float coin) {
+int sample_mult(FLOAT_TYPE* probabilities, int n, float coin) {
     // sample index from probabilities (they must sum to 1!)
     // coin is a random number in [0, 1), usually from random_f32()
     float cdf = 0.0f;
@@ -389,7 +403,7 @@ int compare(const void* a, const void* b) {
     return 0;
 }
 
-int sample_topp(float16_t* probabilities, int n, float topp, ProbIndex* probindex, float coin) {
+int sample_topp(FLOAT_TYPE* probabilities, int n, float topp, ProbIndex* probindex, float coin) {
     // top-p sampling (or "nucleus sampling") samples from the smallest set of
     // tokens that exceed probability topp. This way we never sample tokens that
     // have very low probabilities and are less likely to go "off the rails".
@@ -465,7 +479,7 @@ float random_f32(unsigned long long *state) { // random float32 in [0,1)
     return (random_u32(state) >> 8) / 16777216.0f;
 }
 
-int sample(Sampler* sampler, float16_t* logits) {
+int sample(Sampler* sampler, FLOAT_TYPE* logits) {
     // sample the token given the logits and some hyperparameters
     int next;
     if (sampler->temperature == 0.0f) {
@@ -475,7 +489,7 @@ int sample(Sampler* sampler, float16_t* logits) {
         // apply the temperature to the logits
         for (int q=0; q<sampler->vocab_size; q++) { logits[q] /= sampler->temperature; }
         // apply softmax to the logits to get the probabilities for next token
-        arm_softmax_f16(logits, sampler->vocab_size);
+        SOFTMAX(logits, sampler->vocab_size);
         // flip a (float) coin (this is our source of entropy for sampling)
         float coin = random_f32(&sampler->rng_state);
         // we sample from this distribution to get the next token
@@ -549,7 +563,7 @@ int generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, c
     while (pos < steps) {
 
         // forward the transformer to get logits for the next token
-        float16_t* logits = forward(transformer, token, pos);
+        FLOAT_TYPE* logits = forward(transformer, token, pos);
 
         // advance the state machine
         if (pos < num_prompt_tokens - 1) {
@@ -785,7 +799,49 @@ void checkITCMTime()
     printf("  Measured cycles %ld\r\n",(b-a)/5);
 }
 
+#define NB 41
+// A B C D E F G H
+// A C B D E G F H ...
+uint8_t a[48]={0x44,0x44,0xc4,0xc4,0x44,0x44,0xc4,0xc4,
+               0x44,0x44,0xc4,0xc4,0x44,0x44,0xc4,0xc4,
+               0x44,0x44,0xc4,0xc4,0x44,0x44,0xc4,0xc4,
+               0x44,0x44,0xc4,0xc4,0x44,0x44,0xc4,0xc4,
+               0x44,0x44,0xc4,0xc4,0x44,0x44,0xc4,0xc4,
+               0x44,0x44,0xc4,0xc4,0x44,0x44,0xc4,0xc4};
+float16_t f[48] = {2.0f16,-2.0f16,2.0f16,-2.0f16,2.0f16,-2.0f16,2.0f16,-2.0f16,
+                   2.0f16,-2.0f16,2.0f16,-2.0f16,2.0f16,-2.0f16,2.0f16,-2.0f16,
+                   2.0f16,-2.0f16,2.0f16,-2.0f16,2.0f16,-2.0f16,2.0f16,-2.0f16,
+                   2.0f16,-2.0f16,2.0f16,-2.0f16,2.0f16,-2.0f16,2.0f16,-2.0f16,
+                   2.0f16,-2.0f16,2.0f16,-2.0f16,2.0f16,-2.0f16,2.0f16,-2.0f16,
+                   2.0f16,-2.0f16,2.0f16,-2.0f16,2.0f16,-2.0f16,2.0f16,-2.0f16,
+};
+/*uint8_t a[48]={1,9,2,10,3,11,4,12,
+               5,13,6,14,7,15,8,16,
+               1,9,2,10,3,11,4,12,
+               5,13,6,14,7,15,8,16,
+               1,9,2,10,3,11,4,12,
+               5,13,6,14,7,15,8,16};*/
+float16_t b[NB]={0};
+
+void test_kernel()
+{
+   //arm_copy_f8_to_f16(b,(int8_t*)a,NB);
+
+   //arm_mult_f8_f16((const int8_t*)a,f,b,NB);
+    f[0] = 1.0f16;
+    arm_rms_norm_f8_f16(b,f,( int8_t*)a,NB);
+
+   for(int i=0;i<NB;i++)
+   {
+     printf("%02d : %f\n",i,b[i]);
+   }
+
+}
+
 void demo() {
+
+    //test_kernel();
+    //return;
 
     int error = 0;
     int systick_status = 0;
@@ -827,7 +883,13 @@ void demo() {
     if (steps < 0) steps = 0;
 
     #if !defined(MPS3)
-      network_mem = load_mem((const char*)"net.bin",(const unsigned char*)0x70000000);
+      #if defined(WEIGHT_F8)
+        network_mem = load_mem((const char*)"net_f8.bin",(const unsigned char*)0x70000000);
+      #elif defined(WEIGHT_I8)
+        network_mem = load_mem((const char*)"net_int8.bin",(const unsigned char*)0x70000000);
+      #else
+        network_mem = load_mem((const char*)"net_f16.bin",(const unsigned char*)0x70000000);
+      #endif
       tokenizer_mem = load_mem((const char*)"tok.bin",(const unsigned char*)0x71D00000);
     #else
       network_mem   = (const unsigned char*)0x70000000;

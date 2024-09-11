@@ -14,11 +14,19 @@ extern "C"
 {
 #endif
 
+typedef int8_t float8_t;
+
 extern byte_length_t get_tensor_length(const unsigned char *,
                                        const int tensor_nb);
 
 extern float32_t *get_f32_tensor(const unsigned char *,
                                  const int nb);
+
+extern float8_t *get_f8_tensor(const unsigned char *,
+                               const int nb);
+
+extern int8_t *get_i8_tensor(const unsigned char *,
+                             const int nb);
 
 #if defined(ARM_FLOAT16_SUPPORTED)
 extern float16_t *get_f16_tensor(const unsigned char *,

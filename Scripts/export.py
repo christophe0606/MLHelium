@@ -3,12 +3,18 @@ import struct
 
 FLOAT32_TYPE = 0
 FLOAT16_TYPE = 1
+INT8_TYPE = 2
+UINT32_TYPE = 3
 
 def _dtype_to_int(d):
     if d == np.float32:
         return FLOAT32_TYPE
     if d == np.float16:
         return FLOAT16_TYPE
+    if d == np.int8:
+        return INT8_TYPE
+    if d == np.uint32:
+        return UINT32_TYPE
     return(None)
 
 def _int_to_dtype(d):
@@ -16,6 +22,10 @@ def _int_to_dtype(d):
         return(np.float32)
     if d == FLOAT16_TYPE:
         return(np.float16)
+    if d == INT8_TYPE:
+        return(np.int8)
+    if d == UINT32_TYPE:
+        return(np.uint32)
     return(None)
 
 def _align(file,pos,alignment):
@@ -49,6 +59,13 @@ def _serialize_f16(file, tensor):
     file.write(b)
     return(len(b))
 
+def _serialize_int8(file, tensor):
+    """ writes one f16 tensor to file that is open in wb mode """
+    tensor = tensor.astype(np.int8).flatten()
+    b = struct.pack(f'{len(tensor)}b', *tensor)
+    file.write(b)
+    return(len(b))
+
 def convert_tensor(x):
     if x.dtype == np.double:
         x = x.astype(dtype=np.float32)
@@ -58,7 +75,7 @@ def serialize_tensors(file,tensors,alignment=8):
     """
     Serialize the tensors to a binary file with alignment.
 
-    The format is as simple as possible and with enouhg information
+    The format is as simple as possible and with enough information
     to be able to read the samples back with Python.
 
     The shapes and strides are not saved. The C code using this data
@@ -105,6 +122,10 @@ def serialize_tensors(file,tensors,alignment=8):
            pos += _serialize_f32(file,t)
         elif t.dtype == np.float16:
            pos += _serialize_f16(file,t)
+        elif t.dtype == np.int8:
+           pos += _serialize_int8(file,t)
+        elif t.dtype == np.uint32:
+           pos += _serialize_u32(file,t)
         else:
            raise NameError(f"Unsupported datatype {str(t.dtype)}")
         
@@ -135,6 +156,11 @@ def _read_f16_array(file,nb):
     a = struct.unpack(f'{nb}e', b)
     return(list(a))
 
+def _read_int8_array(file,nb):
+    b = file.read(nb)
+    a = struct.unpack(f'{nb}b', b)
+    return(list(a))
+
 def read_tensors(file):
     res = []
     nb=_read_uint32(file)
@@ -152,6 +178,10 @@ def read_tensors(file):
            a = _read_f32_array(file,s>>2)
         elif dt == FLOAT16_TYPE:
            a = _read_f16_array(file,s>>1)
+        elif dt == INT8_TYPE:
+           a = _read_int8_array(file,s)
+        elif dt == UINT32_TYPE:
+           a = _read_uint32_array(file,s>>2)
         res.append(a)
 
     return(res)
