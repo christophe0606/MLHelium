@@ -10,10 +10,11 @@ RTE/_*
 RTE/
 *.cbuild*.yml
 cprj/
-*.bin 
 *.dat
 *.pt
 Common/MPS3
-
+app.bin
+net_f16.bin
+net_f8.bin
 
 
