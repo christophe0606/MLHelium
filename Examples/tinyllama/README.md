@@ -38,15 +38,17 @@ TOTALIMAGES: 3                     ;Number of Images (Max: 32)
 
 IMAGE0ADDRESS: 0x01000000          ;Please select the required executable program
 IMAGE0UPDATE: AUTO                 ;Image Update:NONE/AUTO/FORCE
-IMAGE0FILE: \SOFTWARE\app.bin      ;The tinyllama demo
+IMAGE0FILE: \SOFTWARE\app.bin      ;Application
 
 IMAGE1ADDRESS: 0x0C000000          ;Please select the required executable program
 IMAGE1UPDATE: AUTO                 ;Image Update:NONE/AUTO/FORCE
-IMAGE1FILE: \SOFTWARE\net.bin      ;The f16 network
+IMAGE1FILE: \SOFTWARE\net_int8.bin ;Network with int8 weight and float scalings
 
 IMAGE2ADDRESS: 0x0DD00000          ;Please select the required executable program
 IMAGE2UPDATE: AUTO                 ;Image Update:NONE/AUTO/FORCE
-IMAGE2FILE: \SOFTWARE\tok.bin      ;The tokenizer
+IMAGE2FILE: \SOFTWARE\tok.bin      ;Tokenizer
+
+
 
 ```
 
