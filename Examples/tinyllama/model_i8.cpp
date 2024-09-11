@@ -26,9 +26,43 @@ Internal memory for some part of the transformer state
 
 */
 #define ALIGNMENT_PAD (11*8)
-//#define NB_INT_MEM (((DIM+N_HEADS * MAX_SEQ_LEN + VOCAB_SIZE + 4*DIM+2*HIDDEN_DIM + DIM + HIDDEN_DIM)*sizeof(FLOAT_TYPE)) + (DIM+HIDDEN_DIM))
-#define NB_INT_MEM 16
-static unsigned char* internal_mem[NB_INT_MEM+ALIGNMENT_PAD];
+
+#define INT_TOKEN 1
+#define INT_X 1
+#define INT_XB 1
+#define INT_XB2 1
+#define INT_HB 1
+#define INT_HB2 1
+#define INT_XQ 1
+#define INT_HQ 1
+#define INT_Q 1
+#define INT_KEY_CACHE 0
+#define INT_VAL_CACHE 0
+#define INT_ATT 1
+#define INT_LOGIT 0
+#define INT_CS 1
+
+#define NB_INT_MEM                                                                         \
+((DIM * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)                               * INT_TOKEN)+    \
+((DIM * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)                               * INT_X)+        \
+((DIM * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)                               * INT_XB)+       \
+((DIM * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)                               * INT_XB2)+      \
+((HIDDEN_DIM * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)                        * INT_HB)+       \
+((HIDDEN_DIM * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)                        * INT_HB2)+      \
+((DIM * sizeof(int8_t) + ALIGNMENT_PAD)                                   * INT_XQ)+       \
+((DIM * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)                               * INT_XQ)+       \
+((HIDDEN_DIM * sizeof(int8_t) + ALIGNMENT_PAD)                            * INT_HQ)+       \
+((HIDDEN_DIM * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)                        * INT_HQ)+       \
+((DIM * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)                               * INT_Q)+        \
+(((N_LAYERS * MAX_SEQ_LEN * KV_DIM) * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD) * INT_KEY_CACHE)+\
+(((N_LAYERS * MAX_SEQ_LEN * KV_DIM) * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD) * INT_VAL_CACHE)+\
+(((N_HEADS * MAX_SEQ_LEN) * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)           * INT_ATT)+      \
+((VOCAB_SIZE * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)                        * INT_LOGIT)+    \
+((DIM * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)                               * INT_CS)
+
+//#define NB_INT_MEM (((DIM+DIM+N_HEADS * MAX_SEQ_LEN + VOCAB_SIZE + 4*DIM+2*HIDDEN_DIM + DIM + HIDDEN_DIM)*sizeof(FLOAT_TYPE)) + (DIM+HIDDEN_DIM) + 3*DIM*sizeof(float32_t))
+//#define NB_INT_MEM 16
+static unsigned char* internal_mem[NB_INT_MEM];
 static memory_area_t internal ;
 
 size_t get_internal_current_bytes()
@@ -66,7 +100,7 @@ void quantize(QuantizedTensor *qx, FLOAT_TYPE* x, int n) {
 
         // calculate and write the quantized values
         for (int i = 0; i < GROUP_SIZE; i++) {
-            float16_t quant_value = x[group * GROUP_SIZE + i] / scale; // scale
+            FLOAT_TYPE quant_value = x[group * GROUP_SIZE + i] / scale; // scale
             int8_t quantized = (int8_t) round(quant_value); // round and clamp
             qx->q[group * GROUP_SIZE + i] = quantized;
         }
@@ -75,63 +109,64 @@ void quantize(QuantizedTensor *qx, FLOAT_TYPE* x, int n) {
 
 static int malloc_run_state(RunState* s) {
 
-    s->token_embedding_table = (FLOAT_TYPE*)MEM_INTERNAL_ALLOC(DIM,FLOAT_TYPE);
+    MEM_ALLOC(s->token_embedding_table,DIM,FLOAT_TYPE,INT_TOKEN);
+
     if (!s->token_embedding_table)
     {
         printf("Error mem alloc token_embedding_table\r\n");
     }
 
-    s->x = (FLOAT_TYPE*)MEM_INTERNAL_ALLOC(DIM,FLOAT_TYPE);
+    MEM_ALLOC(s->x,DIM,FLOAT_TYPE,INT_X);
     if (!s->x)
     {
         printf("Error mem alloc x\r\n");
     }
-    s->xb = (FLOAT_TYPE*)MEM_INTERNAL_ALLOC(DIM,FLOAT_TYPE);
+    MEM_ALLOC(s->xb,DIM,FLOAT_TYPE,INT_XB);
     if (!s->xb)
     {
         printf("Error mem alloc xb\r\n");
     }
-    s->xb2 = (FLOAT_TYPE*)MEM_INTERNAL_ALLOC(DIM,FLOAT_TYPE);
+    MEM_ALLOC(s->xb2,DIM,FLOAT_TYPE,INT_XB2);
     if (!s->xb2)
     {
         printf("Error mem alloc xb2\r\n");
     }
 
     
-    s->hb = (FLOAT_TYPE*)MEM_INTERNAL_ALLOC(HIDDEN_DIM,FLOAT_TYPE);
+    MEM_ALLOC(s->hb,HIDDEN_DIM,FLOAT_TYPE,INT_HB);
     if (!s->hb)
     {
         printf("Error mem alloc hb\r\n");
     }
-    s->hb2 = (FLOAT_TYPE*)MEM_INTERNAL_ALLOC(HIDDEN_DIM,FLOAT_TYPE);
+    MEM_ALLOC(s->hb2,HIDDEN_DIM,FLOAT_TYPE,INT_HB2);
     if (!s->hb2)
     {
         printf("Error mem alloc hb2\r\n");
     }
 
-    s->xq.q = (int8_t*)MEM_INTERNAL_ALLOC(DIM,int8_t);
+    MEM_ALLOC(s->xq.q,DIM,int8_t,INT_XQ);
     if (!s->xq.q)
     {
         printf("Error mem alloc xq.q\r\n");
     }
-    s->xq.s = (FLOAT_TYPE*)MEM_INTERNAL_ALLOC(DIM,FLOAT_TYPE);
+    MEM_ALLOC(s->xq.s,DIM,FLOAT_TYPE,INT_XQ);
     if (!s->xq.s)
     {
         printf("Error mem alloc xq.s\r\n");
     }
 
-    s->hq.q = (int8_t*)MEM_INTERNAL_ALLOC(HIDDEN_DIM,int8_t);
+    MEM_ALLOC(s->hq.q,HIDDEN_DIM,int8_t,INT_HQ);
     if (!s->hq.q)
     {
         printf("Error mem alloc hq.q\r\n");
     }
-    s->hq.s = (FLOAT_TYPE*)MEM_INTERNAL_ALLOC(HIDDEN_DIM,FLOAT_TYPE);
+    MEM_ALLOC(s->hq.s,HIDDEN_DIM,FLOAT_TYPE,INT_HQ);
     if (!s->hq.s)
     {
         printf("Error mem alloc hq.s\r\n");
     }
 
-    s->q = (FLOAT_TYPE*)MEM_INTERNAL_ALLOC(DIM,FLOAT_TYPE);
+    MEM_ALLOC(s->q,DIM,FLOAT_TYPE,INT_Q);
     if (!s->q)
     {
         printf("Error mem alloc q\r\n");
@@ -139,34 +174,35 @@ static int malloc_run_state(RunState* s) {
 
     // Caches are too big for internal memory so they are
     // allocated in the external heap
-    s->key_cache = (FLOAT_TYPE*)ml_aligned_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(FLOAT_TYPE));
+    MEM_ALLOC(s->key_cache,N_LAYERS * MAX_SEQ_LEN * KV_DIM, FLOAT_TYPE,INT_KEY_CACHE);
     if (!s->key_cache)
     {
         printf("Error mem alloc key_cache\r\n");
     }
-    s->value_cache = (FLOAT_TYPE*)ml_aligned_calloc(N_LAYERS * MAX_SEQ_LEN * KV_DIM, sizeof(FLOAT_TYPE));
+    MEM_ALLOC(s->value_cache,N_LAYERS * MAX_SEQ_LEN * KV_DIM, FLOAT_TYPE,INT_VAL_CACHE);
     if (!s->value_cache)
     {
         printf("Error mem alloc value_cache\r\n");
     }
 
-    s->att = (FLOAT_TYPE*)MEM_INTERNAL_ALLOC(N_HEADS * MAX_SEQ_LEN,FLOAT_TYPE);
+    MEM_ALLOC(s->att,N_HEADS * MAX_SEQ_LEN,FLOAT_TYPE,INT_ATT);
     if (!s->att)
     {
         printf("Error mem alloc att\r\n");
     }
 
-    s->logits = (FLOAT_TYPE*)MEM_INTERNAL_ALLOC(VOCAB_SIZE,FLOAT_TYPE);
+    MEM_ALLOC(s->logits,VOCAB_SIZE,FLOAT_TYPE,INT_LOGIT);
     if (!s->logits)
     {
         printf("Error mem alloc logits\r\n");
     }
 
-    s->cs_cache = (FLOAT_TYPE*)MEM_INTERNAL_ALLOC(DIM,FLOAT_TYPE);
+    MEM_ALLOC(s->cs_cache,DIM,FLOAT_TYPE,INT_CS);
     if (!s->cs_cache)
     {
         printf("Error mem alloc cs_cache\r\n");
     }
+
 
     // ensure all mallocs went fine
     if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q
@@ -187,17 +223,25 @@ static void free_run_state(RunState* s) {
         return;
     }
     // Using internal memory so no need to be released
-    FREE_INTERNAL_ALLOC(s->token_embedding_table);
-    FREE_INTERNAL_ALLOC(s->x);
-    FREE_INTERNAL_ALLOC(s->xb);
-    FREE_INTERNAL_ALLOC(s->xb2);
-    FREE_INTERNAL_ALLOC(s->hb);
-    FREE_INTERNAL_ALLOC(s->hb2);
-    FREE_INTERNAL_ALLOC(s->q);
-    FREE_INTERNAL_ALLOC(s->att);
-    FREE_INTERNAL_ALLOC(s->logits);
-    aligned_free(s->key_cache);
-    aligned_free(s->value_cache);
+    MEM_FREE(s->token_embedding_table,INT_TOKEN);
+    MEM_FREE(s->x,INT_X);
+    MEM_FREE(s->xb,INT_XB);
+    MEM_FREE(s->xb2,INT_XB2);
+    MEM_FREE(s->hb,INT_HB);
+    MEM_FREE(s->hb2,INT_HB2);
+    MEM_FREE(s->q,INT_Q);
+    MEM_FREE(s->att,INT_ATT);
+    MEM_FREE(s->cs_cache,INT_CS);
+
+    MEM_FREE(s->logits,INT_LOGIT);
+    MEM_FREE(s->key_cache,INT_KEY_CACHE);
+    MEM_FREE(s->value_cache,INT_VAL_CACHE);
+
+    MEM_FREE(s->xq.s,INT_XQ);
+    MEM_FREE(s->xq.q,INT_XQ);
+
+    MEM_FREE(s->hq.s,INT_HQ);
+    MEM_FREE(s->hq.q,INT_HQ);
 }
 
 static void memory_map_weights(TransformerWeights *w, const unsigned char* ptr) {
@@ -399,7 +443,7 @@ FLOAT_TYPE* forward(Transformer* transformer, int token, int pos) {
 
         for(int k=0;k<N_HEADS;k++)
         {
-            memcpy(s->cs_cache+k*head_size,w->freq_cos_sin+head_size*pos,head_size*sizeof(float16_t));
+            memcpy(s->cs_cache+k*head_size,w->freq_cos_sin+head_size*pos,head_size*sizeof(FLOAT_TYPE));
         }
         CMPLX_MULT(s->cs_cache,s->q ,s->q,DIM>>1);
         CMPLX_MULT(s->cs_cache,s->k ,s->k,KV_DIM>>1);

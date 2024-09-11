@@ -18,7 +18,10 @@ typedef struct
 } arm_matrix_instance_f8;
 
 
-extern void arm_rms_norm_f16(float16_t* o, float16_t* x, float16_t* weight, int size);
+extern void arm_rms_norm_f16(float16_t* o, 
+                             float16_t* x, 
+                             float32_t* weight, 
+                             int size);
 extern void arm_softmax_f16(float16_t* x, int size);
 extern void arm_swiglu_f16(float16_t* hb, const float16_t* hb2,int size);
 

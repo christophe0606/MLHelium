@@ -11,12 +11,16 @@ sys.path.insert(0, '../../scripts')
 
 from export import serialize_tensors,read_tensors
 
-FLOAT16_TYPE = False
 
 parser = argparse.ArgumentParser(description='Convert network')
 parser.add_argument('-f8', action='store_true', help="f8 weights")
 parser.add_argument('-i8', action='store_true', help="int8 weights")
 args = parser.parse_args()
+
+if args.i8:
+    FLOAT16_TYPE = False
+else:
+    FLOAT16_TYPE = True
 
 if args.f8:
     print("f8 weights (2 bits of mantissa)")
@@ -269,7 +273,7 @@ group_size = {group_size}
 
     # final classifier weights
     if not shared_classifier:
-        append_float_tensor(tensors, model.output.weight)
+        quantize_export(tensors, model.output.weight,8,group_size)
 
     with open(filepath,"wb") as f:
         serialize_tensors(f,tensors)

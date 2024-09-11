@@ -3,11 +3,13 @@
 #include <math.h>
 #include "dsp/statistics_functions_f16.h"
 #include "dsp/basic_math_functions_f16.h"
+#include "dsp/support_functions_f16.h"
 
 #include <dsppp/memory_pool.hpp>
 #include <dsppp/matrix.hpp>
 
 using namespace arm_cmsis_dsp;
+
 
 void arm_rms_norm_f16(float16_t* o, float16_t* x, float16_t* weight, int size) {
 
@@ -26,3 +28,5 @@ void arm_rms_norm_f16(float16_t* o, float16_t* x, float16_t* weight, int size) {
     oV = weightV * (xV * ss);
 
 }
+
+

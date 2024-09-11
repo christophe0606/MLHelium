@@ -13,8 +13,6 @@
 #define SOFTMAX arm_softmax_f16
 #define SWIGLU arm_swiglu_f16
 #define MAX_VEC arm_max_f16
-#define MEM_INTERNAL_ALLOC(NB,DT) add_aligned_buffer_to_area(&internal,(NB)*sizeof(DT),8)
-#define FREE_INTERNAL_ALLOC(P)
 */
 
 #define FLOAT_TYPE float32_t
@@ -28,9 +26,22 @@
 #define SWIGLU arm_swiglu_f32
 #define MAX_VEC arm_max_f32
 
-#define MEM_INTERNAL_ALLOC(NB,DT) ml_aligned_calloc((NB),sizeof(DT))
-#define FREE_INTERNAL_ALLOC(P) aligned_free((P))
 
+#define MEM_ALLOC(R,NB,DT,ISINT)\
+if (ISINT)                                                    \
+{                                                           \
+    R=(DT*)add_aligned_buffer_to_area(&internal,(NB)*sizeof(DT),8);\
+}                                                           \
+else                                                        \
+{                                                           \
+   R=(DT*)ml_aligned_calloc((NB),sizeof(DT));                      \
+}
+
+#define MEM_FREE(P,ISINT)\
+if (!ISINT)              \
+{                      \
+    aligned_free((P)); \
+}
 
 typedef struct {
     int8_t* q;    // quantized values
@@ -45,8 +56,8 @@ struct TransformerWeights {
     // token embedding table
     QuantizedTensor q_tokens;    // (vocab_size, dim)
     // weights for rmsnorms
-    FLOAT_TYPE* rms_att_weight[N_LAYERS]; // (layer, dim) rmsnorm weights
-    FLOAT_TYPE* rms_ffn_weight[N_LAYERS]; // (layer, dim)
+    float32_t* rms_att_weight[N_LAYERS]; // (layer, dim) rmsnorm weights
+    float32_t* rms_ffn_weight[N_LAYERS]; // (layer, dim)
     // weights for matmuls. note dim == n_heads * head_size
     QuantizedTensor wq[N_LAYERS]; // (layer, dim, n_heads * head_size)
     QuantizedTensor wk[N_LAYERS]; // (layer, dim, n_kv_heads * head_size)
@@ -57,7 +68,7 @@ struct TransformerWeights {
     QuantizedTensor w2[N_LAYERS]; // (layer, dim, hidden_dim)
     QuantizedTensor w3[N_LAYERS]; // (layer, hidden_dim, dim)
     // final rmsnorm
-    FLOAT_TYPE* rms_final_weight; // (dim,)
+    float32_t* rms_final_weight; // (dim,)
     // (optional) classifier weights for the logits, on the last layer
     QuantizedTensor wcls;
 
@@ -69,7 +80,7 @@ struct TransformerWeights {
 
 struct RunState {
     // current wave of activations
-    FLOAT_TYPE* token_embedding_table;    // (vocab_size, dim)
+    FLOAT_TYPE* token_embedding_table;    // dim
     FLOAT_TYPE* x; // activation at current time stamp (dim,)
     FLOAT_TYPE* xb; // same, but inside a residual branch (dim,)
     FLOAT_TYPE* xb2; // an additional buffer just for convenience (dim,)
@@ -88,6 +99,7 @@ struct RunState {
 
     // cos_sin cache 
     FLOAT_TYPE *cs_cache;
+
 } ;
 
 struct Transformer {
