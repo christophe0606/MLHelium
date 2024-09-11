@@ -399,18 +399,18 @@ static void matmul(FLOAT_TYPE* xout,
     FLOAT_TYPE *xs=x->s;
     FLOAT_TYPE *ws=w->s;
     const uint32_t DGS = n / GROUP_SIZE;
+    const uint32_t offsets[4]={0,DGS,2*DGS,3*DGS};
+    uint32x4_t voff;
+
+    voff = vld1q(offsets);
 
     for (i = 0; i < d; i += UNROLL)
     {
 
-        FLOAT_TYPE val1 = (FLOAT_TYPE) 0.0f;
-        FLOAT_TYPE val2 = (FLOAT_TYPE) 0.0f;
-        FLOAT_TYPE val3 = (FLOAT_TYPE) 0.0f;
-        FLOAT_TYPE val4 = (FLOAT_TYPE) 0.0f;
-        int32_t ival1 = 0;
-        int32_t ival2 = 0;
-        int32_t ival3 = 0;
-        int32_t ival4 = 0;
+        float32x4_t val = vdupq_n_f32(0.0f); 
+        
+        int32_t ival = 0;
+        
         int8x16_t v;
         int8x16_t va;
         int8x16_t vb;
@@ -423,6 +423,14 @@ static void matmul(FLOAT_TYPE* xout,
         for (int j = 0; j <= n - GROUP_SIZE; j += GROUP_SIZE) 
         {
 
+            float32x4_t wsvec; 
+            float32x4_t tmp; 
+            wsvec = vldrwq_gather_shifted_offset_f32(ws,voff);
+            ws++;
+
+            wsvec = vmulq_n_f32(wsvec,xs[0]);
+            xs++;
+
             // Process GROUP_SIZE = 32 samples
 
             va = vld1q(xq);
@@ -432,44 +440,43 @@ static void matmul(FLOAT_TYPE* xout,
 
             v = vld1q(wq1);
             wq1 += 16;
-            ival1 = vmladavaq(ival1, va, v);
+            ival = vmladavaq(ival, va, v);
             v = vld1q(wq1);
             wq1 += 16;
-            ival1 = vmladavaq(ival1, vb, v);
-            val1 += ((FLOAT_TYPE) ival1) * ws[0] * xs[0];
-            ival1 = 0;
+            ival = vmladavaq(ival, vb, v);
+            tmp[0] = (FLOAT_TYPE) ival;
+            ival = 0;
 
             v = vld1q(wq2);
             wq2 += 16;
-            ival2 = vmladavaq(ival2, va, v);
+            ival = vmladavaq(ival, va, v);
             v = vld1q(wq2);
             wq2 += 16;
-            ival2 = vmladavaq(ival2, vb, v);
-            val2 += ((FLOAT_TYPE) ival2) * ws[DGS] * xs[0];
-            ival2 = 0;
+            ival = vmladavaq(ival, vb, v);
+            tmp[1] = (FLOAT_TYPE) ival;
+            ival = 0;
 
 
             v = vld1q(wq3);
             wq3 += 16;
-            ival3 = vmladavaq(ival3, va, v);
+            ival = vmladavaq(ival, va, v);
             v = vld1q(wq3);
             wq3 += 16;
-            ival3 = vmladavaq(ival3, vb, v);
-            val3 += ((FLOAT_TYPE) ival3) * ws[2*DGS] * xs[0];
-            ival3 = 0;
+            ival = vmladavaq(ival, vb, v);
+            tmp[2] = (FLOAT_TYPE) ival;
+            ival = 0;
 
             v = vld1q(wq4);
             wq4 += 16;
-            ival4 = vmladavaq(ival4, va, v);
+            ival = vmladavaq(ival, va, v);
             v = vld1q(wq4);
             wq4 += 16;
-            ival4 = vmladavaq(ival4, vb, v);
-            val4 += ((FLOAT_TYPE) ival4) * ws[3*DGS] * xs[0];
-            ival4 = 0;
+            ival = vmladavaq(ival, vb, v);
+            tmp[3] = (FLOAT_TYPE) ival;
+            ival = 0;
 
 
-            xs++;
-            ws++;
+            val = vfmaq(val,tmp,wsvec);
             
 
         }
@@ -481,10 +488,8 @@ static void matmul(FLOAT_TYPE* xout,
         wq3 += (UNROLL-1)*n;
         wq4 += (UNROLL-1)*n;
 
-        xout[i] = val1;
-        xout[i+1] = val2;
-        xout[i+2] = val3;
-        xout[i+3] = val4;
+        vst1q(xout,val);
+        xout += 4;
 
     }
 }
