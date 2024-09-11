@@ -17,3 +17,6 @@
 
 #define KV_DIM ((DIM * N_KV_HEADS) / N_HEADS)
 
+// For accurate timing measurement, should be
+// coherent with value used for MPS3
+#define MPS3_FREQ 50000000UL

@@ -864,6 +864,8 @@ void demo() {
     GLCD_SetFontID(kFont16x24);
 #endif
 
+    SystemCoreClock = MPS3_FREQ;
+
     const unsigned char *network_mem;
     const unsigned char *tokenizer_mem;
 

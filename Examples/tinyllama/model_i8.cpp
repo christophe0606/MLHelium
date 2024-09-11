@@ -376,6 +376,7 @@ static void matmul(float32_t* xout,
 
 }
 
+#define UNROLL 4
 
 // Works only for GROUP_SIZE = 32
 static void matmul(FLOAT_TYPE* xout, 
@@ -389,8 +390,18 @@ static void matmul(FLOAT_TYPE* xout,
     // inputs to this function are both quantized
 
     int i;
-    int in = 0;
-    for (i = 0; i < d; i+=4) {
+
+    int8_t *xq=x->q; 
+    int8_t *wq1=w->q;
+    int8_t *wq2=wq1 + n;
+    int8_t *wq3=wq2 + n;
+    int8_t *wq4=wq3 + n;
+    FLOAT_TYPE *xs=x->s;
+    FLOAT_TYPE *ws=w->s;
+    const uint32_t DGS = n / GROUP_SIZE;
+
+    for (i = 0; i < d; i += UNROLL)
+    {
 
         FLOAT_TYPE val1 = (FLOAT_TYPE) 0.0f;
         FLOAT_TYPE val2 = (FLOAT_TYPE) 0.0f;
@@ -403,62 +414,78 @@ static void matmul(FLOAT_TYPE* xout,
         int8x16_t v;
         int8x16_t va;
         int8x16_t vb;
+       
 
         // do the matmul in groups of GROUP_SIZE
-        int j;
-        int jn = 0;
-
-        for (j = 0; j <= n - GROUP_SIZE; j += GROUP_SIZE) 
+        xq=x->q; 
+        xs=x->s;
+    
+        for (int j = 0; j <= n - GROUP_SIZE; j += GROUP_SIZE) 
         {
 
             // Process GROUP_SIZE = 32 samples
-            int inn = in;
 
-            va = vld1q(&x->q[j]);
-            vb = vld1q(&x->q[j + 16]);
+            va = vld1q(xq);
+            xq += 16;
+            vb = vld1q(xq);
+            xq += 16;
 
-            v = vld1q(&w->q[inn + j]);
+            v = vld1q(wq1);
+            wq1 += 16;
             ival1 = vmladavaq(ival1, va, v);
-            v = vld1q(&w->q[inn + j + 16]);
+            v = vld1q(wq1);
+            wq1 += 16;
             ival1 = vmladavaq(ival1, vb, v);
-            val1 += ((FLOAT_TYPE) ival1) * w->s[(inn)  / GROUP_SIZE + jn] * x->s[jn];
+            val1 += ((FLOAT_TYPE) ival1) * ws[0] * xs[0];
             ival1 = 0;
 
-            inn += n;
-            v = vld1q(&w->q[inn + j]);
+            v = vld1q(wq2);
+            wq2 += 16;
             ival2 = vmladavaq(ival2, va, v);
-            v = vld1q(&w->q[inn + j + 16]);
+            v = vld1q(wq2);
+            wq2 += 16;
             ival2 = vmladavaq(ival2, vb, v);
-            val2 += ((FLOAT_TYPE) ival2) * w->s[(inn)  / GROUP_SIZE + jn] * x->s[jn];
+            val2 += ((FLOAT_TYPE) ival2) * ws[DGS] * xs[0];
             ival2 = 0;
 
-            inn += n;
-            v = vld1q(&w->q[inn + j]);
+
+            v = vld1q(wq3);
+            wq3 += 16;
             ival3 = vmladavaq(ival3, va, v);
-            v = vld1q(&w->q[inn + j + 16]);
+            v = vld1q(wq3);
+            wq3 += 16;
             ival3 = vmladavaq(ival3, vb, v);
-            val3 += ((FLOAT_TYPE) ival3) * w->s[(inn)  / GROUP_SIZE + jn] * x->s[jn];
+            val3 += ((FLOAT_TYPE) ival3) * ws[2*DGS] * xs[0];
             ival3 = 0;
 
-            inn += n;
-            v = vld1q(&w->q[inn + j]);
+            v = vld1q(wq4);
+            wq4 += 16;
             ival4 = vmladavaq(ival4, va, v);
-            v = vld1q(&w->q[inn + j + 16]);
+            v = vld1q(wq4);
+            wq4 += 16;
             ival4 = vmladavaq(ival4, vb, v);
-            val4 += ((FLOAT_TYPE) ival4) * w->s[(inn)  / GROUP_SIZE + jn] * x->s[jn];
+            val4 += ((FLOAT_TYPE) ival4) * ws[3*DGS] * xs[0];
             ival4 = 0;
 
 
+            xs++;
+            ws++;
+            
 
-            jn ++;
         }
+
+        ws += (UNROLL-1)*DGS;
+
+        wq1 += (UNROLL-1)*n;
+        wq2 += (UNROLL-1)*n;
+        wq3 += (UNROLL-1)*n;
+        wq4 += (UNROLL-1)*n;
 
         xout[i] = val1;
         xout[i+1] = val2;
         xout[i+2] = val3;
         xout[i+3] = val4;
 
-        in += 4*n;
     }
 }
 
