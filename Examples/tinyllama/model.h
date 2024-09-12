@@ -9,6 +9,9 @@
 #define VOCAB_SIZE 32000
 #define MAX_SEQ_LEN 256
 #define SHARED_WEIGHTS 1
+#define KV_MUL  (N_HEADS / N_KV_HEADS) // integer multiplier of the kv sharing in multiquery
+#define HEAD_SIZE  (DIM / N_HEADS)
+
 // Used to for int8 quantized version
 // model_i8 assumes DIM is a multiple of GROUP_SIZE
 // and the matmul in model_i8 assumes GROUP_SIZE is 32

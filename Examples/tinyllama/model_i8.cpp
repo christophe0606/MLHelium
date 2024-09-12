@@ -11,7 +11,10 @@
 #include "dsp/complex_math_functions.h"
 #include "dsp/fast_math_functions.h"
 
+#include "arm_helium_utils.h"
+
 #include "model_i8.h"
+#include "model_i8_tools.h"
 
 #include "common.h"
 #include "memory.h"
@@ -514,8 +517,6 @@ FLOAT_TYPE* forward(Transformer* transformer, int token, int pos) {
     TransformerWeights* w = &transformer->weights;
     RunState* s = &transformer->state;
     FLOAT_TYPE *x = s->x;
-    int kv_mul = N_HEADS / N_KV_HEADS; // integer multiplier of the kv sharing in multiquery
-    int head_size = DIM / N_HEADS;
 
     // copy the token embedding into x
     dequantize(&w->q_tokens, s->token_embedding_table, DIM,token);
@@ -542,7 +543,7 @@ FLOAT_TYPE* forward(Transformer* transformer, int token, int pos) {
 
         for(int k=0;k<N_HEADS;k++)
         {
-            memcpy(s->cs_cache+k*head_size,w->freq_cos_sin+head_size*pos,head_size*sizeof(FLOAT_TYPE));
+            memcpy(s->cs_cache+k*HEAD_SIZE,w->freq_cos_sin+HEAD_SIZE*pos,HEAD_SIZE*sizeof(FLOAT_TYPE));
         }
         CMPLX_MULT(s->cs_cache,s->q ,s->q,DIM>>1);
         CMPLX_MULT(s->cs_cache,s->k ,s->k,KV_DIM>>1);
@@ -553,37 +554,81 @@ FLOAT_TYPE* forward(Transformer* transformer, int token, int pos) {
 
         for (h = 0; h < N_HEADS; h++) {
             // get the query vector for this head
-            FLOAT_TYPE* q = s->q + h * head_size;
+            FLOAT_TYPE* q = s->q + h * HEAD_SIZE;
             // attention scores for this head
             FLOAT_TYPE* att = s->att + h * MAX_SEQ_LEN;
             // iterate over all timesteps, including the current one
-            for (int t = 0; t <= pos; t++) {
-                // get the key vector for this head and at this timestep
-                FLOAT_TYPE* k = s->key_cache + loff + t * KV_DIM + (h / kv_mul) * head_size;
+            int t = 0;
+            const FLOAT_TYPE* k0 = s->key_cache + loff  + (h / KV_MUL) * HEAD_SIZE;
+            const FLOAT_TYPE* k1 = k0 + KV_DIM;
+            const FLOAT_TYPE* k2 = k1 + KV_DIM;
+            const FLOAT_TYPE* k3 = k2 + KV_DIM;
+            for (; t <= pos+1 - 4; t += 4) 
+            {
                 // calculate the attention score as the dot product of q and k
-                FLOAT_TYPE score = (FLOAT_TYPE)0.0f;
-                DOT_PROD(q,k,head_size,&score);
+                float32x4_t score;//= (FLOAT_TYPE)0.0f;
+                DOT_PROD_4X();
 
-                score /= (FLOAT_COMPUTE)sqrtf(head_size);
+                score = vmulq(score,1.0f / sqrtf(HEAD_SIZE));
+                // save the score to the attention buffer
+                vst1q(&att[t],score);
+
+                k0 += 4*KV_DIM;
+                k1 += 4*KV_DIM;
+                k2 += 4*KV_DIM;
+                k3 += 4*KV_DIM;
+            }
+            for (; t < pos+1; t++) {
+                // calculate the attention score as the dot product of q and k
+                FLOAT_TYPE score; // = (FLOAT_TYPE)0.0f;
+                DOT_PROD(q,k0,HEAD_SIZE,&score);
+
+                score /= (FLOAT_COMPUTE)sqrtf(HEAD_SIZE);
                 // save the score to the attention buffer
                 att[t] = score;
+                k0 += KV_DIM;
             }
 
             // softmax the scores to get attention weights, from 0..pos inclusively
             SOFTMAX_MIXED(att, pos + 1);
 
             // weighted sum of the values, store back into xb
-            FLOAT_TYPE* xb = s->xb + h * head_size;
-            memset(xb, 0, head_size * sizeof(FLOAT_TYPE));
-            for (int t = 0; t <= pos; t++) {
-                // get the value vector for this head and at this timestep
-                FLOAT_TYPE* v = s->value_cache + loff + t * KV_DIM + (h / kv_mul) * head_size;
+            FLOAT_TYPE* xb = s->xb + h * HEAD_SIZE;
+            memset(xb, 0, HEAD_SIZE * sizeof(FLOAT_TYPE));
+            
+            t = 0;
+            const FLOAT_TYPE* v0 = s->value_cache + loff + (h / KV_MUL) * HEAD_SIZE;
+            const FLOAT_TYPE* v1 = v0 + KV_DIM;
+            const FLOAT_TYPE* v2 = v1 + KV_DIM;
+            const FLOAT_TYPE* v3 = v2 + KV_DIM;
+            for (; t <= pos+1 - 4; t += 4)  
+            {
+                // get the attention weight for this timestep
+                float32x4_t a = vld1q(&att[t]);
+                // accumulate the weighted value into xb
+                for (int i = 0; i < HEAD_SIZE; i++) {
+                    xb[i] += (FLOAT_COMPUTE)a[0] * (FLOAT_COMPUTE)v0[i];
+                    xb[i] += (FLOAT_COMPUTE)a[1] * (FLOAT_COMPUTE)v1[i];
+                    xb[i] += (FLOAT_COMPUTE)a[2] * (FLOAT_COMPUTE)v2[i];
+                    xb[i] += (FLOAT_COMPUTE)a[3] * (FLOAT_COMPUTE)v3[i];
+                }
+
+                v0 += 4*KV_DIM;
+                v1 += 4*KV_DIM;
+                v2 += 4*KV_DIM;
+                v3 += 4*KV_DIM;
+            }
+
+            for (; t < pos+1; t++) 
+            {
                 // get the attention weight for this timestep
                 FLOAT_TYPE a = att[t];
                 // accumulate the weighted value into xb
-                for (int i = 0; i < head_size; i++) {
-                    xb[i] += (FLOAT_COMPUTE)a * (FLOAT_COMPUTE)v[i];
+                for (int i = 0; i < HEAD_SIZE; i++) {
+                    xb[i] += (FLOAT_COMPUTE)a * (FLOAT_COMPUTE)v0[i];
                 }
+
+                v0 += KV_DIM;
             }
         }
 
