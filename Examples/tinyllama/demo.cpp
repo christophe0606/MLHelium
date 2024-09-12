@@ -884,6 +884,11 @@ void demo() {
     if (topp < 0.0 || 1.0 < topp) topp = 0.9;
     if (steps < 0) steps = 0;
 
+    printf("Seed = %llu\r\n",rng_seed);
+    printf("Temperature = %f\r\n",temperature);
+    printf("Topp = %f\r\n",topp);
+    printf("Steps = %d\r\n",steps);
+
     #if !defined(MPS3)
       #if defined(WEIGHT_F8)
         network_mem = load_mem((const char*)"net_f8.bin",(const unsigned char*)0x70000000);
