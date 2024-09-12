@@ -22,6 +22,7 @@
 #define ADD arm_add_f32
 #define DOT_PROD arm_dot_prod_f32
 #define GET_FLOAT_TENSOR get_f32_tensor
+#define SOFTMAX_MIXED(A,B) arm_softmax_f32_f16(A,B,s->tmp)
 #define SOFTMAX arm_softmax_f32
 #define SWIGLU arm_swiglu_f32
 #define MAX_VEC arm_max_f32
@@ -99,6 +100,9 @@ struct RunState {
 
     // cos_sin cache 
     FLOAT_TYPE *cs_cache;
+
+    float16_t* tmp; // buffer for scores/attention values (n_heads, seq_len)
+
 
 } ;
 

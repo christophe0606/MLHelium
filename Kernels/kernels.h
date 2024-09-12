@@ -29,8 +29,10 @@ extern void arm_rms_norm_f32(float32_t* o,
                              float32_t* x, 
                              float32_t* weight, 
                              int size);
-extern void arm_softmax_f32(float32_t* x, 
-                            int size);
+
+extern void arm_softmax_f32(float32_t* x, int size);
+extern void arm_softmax_f32_f16(float32_t* x, int size,float16_t *tmp);
+
 extern void arm_swiglu_f32(float32_t* hb, 
                            const float32_t* hb2,
                            int size);

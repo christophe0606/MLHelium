@@ -12,6 +12,7 @@ layer:
         - file: NonLinearActivations/arm_softmax_f32.cpp
         - file: NonLinearActivations/arm_swiglu_f32.cpp
 
+        - file: NonLinearActivations/arm_softmax_f32_f16.cpp
         - file: MixedArithmetic/arm_copy_f8_to_f16.cpp 
         - file: MixedArithmetic/arm_mat_vec_mult_f8_f16.cpp
         - file: MixedArithmetic/arm_mult_f8_f16.cpp

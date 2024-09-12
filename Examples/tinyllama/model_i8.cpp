@@ -27,6 +27,8 @@ Internal memory for some part of the transformer state
 */
 #define ALIGNMENT_PAD (11*8)
 
+// Set to 1 when mapped to DTCM
+// 0 when mapped to DDR
 #define INT_TOKEN 1
 #define INT_X 1
 #define INT_XB 1
@@ -41,6 +43,7 @@ Internal memory for some part of the transformer state
 #define INT_ATT 1
 #define INT_LOGIT 0
 #define INT_CS 1
+#define INT_TMP 1
 
 #define NB_INT_MEM                                                                         \
 ((DIM * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)                               * INT_TOKEN)+    \
@@ -57,6 +60,7 @@ Internal memory for some part of the transformer state
 (((N_LAYERS * MAX_SEQ_LEN * KV_DIM) * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD) * INT_KEY_CACHE)+\
 (((N_LAYERS * MAX_SEQ_LEN * KV_DIM) * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD) * INT_VAL_CACHE)+\
 (((N_HEADS * MAX_SEQ_LEN) * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)           * INT_ATT)+      \
+(((MAX_SEQ_LEN+1) * sizeof(float16_t) + ALIGNMENT_PAD)                      * INT_TMP)+      \
 ((VOCAB_SIZE * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)                        * INT_LOGIT)+    \
 ((DIM * sizeof(FLOAT_TYPE) + ALIGNMENT_PAD)                               * INT_CS)
 
@@ -203,6 +207,12 @@ static int malloc_run_state(RunState* s) {
         printf("Error mem alloc cs_cache\r\n");
     }
 
+    MEM_ALLOC(s->tmp,MAX_SEQ_LEN,float16_t,INT_TMP);
+    if (!s->tmp)
+    {
+        printf("Error mem alloc tmp\r\n");
+    }
+
 
     // ensure all mallocs went fine
     if (!s->x || !s->xb || !s->xb2 || !s->hb || !s->hb2 || !s->q
@@ -211,6 +221,7 @@ static int malloc_run_state(RunState* s) {
      || !s->xq.q || !s->xq.s 
      || !s->hq.q || !s->hq.s 
      || !s->token_embedding_table
+     || !s->tmp
      ) {
         return(kErrorAllocRunState);
     }
@@ -242,6 +253,8 @@ static void free_run_state(RunState* s) {
 
     MEM_FREE(s->hq.s,INT_HQ);
     MEM_FREE(s->hq.q,INT_HQ);
+
+    MEM_FREE(s->tmp,INT_TMP);
 }
 
 static void memory_map_weights(TransformerWeights *w, const unsigned char* ptr) {
@@ -557,7 +570,7 @@ FLOAT_TYPE* forward(Transformer* transformer, int token, int pos) {
             }
 
             // softmax the scores to get attention weights, from 0..pos inclusively
-            SOFTMAX(att, pos + 1);
+            SOFTMAX_MIXED(att, pos + 1);
 
             // weighted sum of the values, store back into xb
             FLOAT_TYPE* xb = s->xb + h * head_size;
