@@ -12,9 +12,11 @@ The model must be written in C (by calling the required kernels). No automatic c
 
 A script is provided to make it easier to export the weights from the Python and use them from the C.
 
-LICENSE is Apache except for some examples that have been adapted from github repository and may use other licences (like MIT).
+LICENSE is Apache except for some examples that have been adapted from other github repositories and may use other licences (like MIT).
 
 Here is a video of the TinyLLama at 50 MHz on Cortex-M55:
+
+https://github.com/user-attachments/assets/28c5c911-4dc9-4778-a57b-6c82b5835103
 
 
 
