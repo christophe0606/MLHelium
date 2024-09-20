@@ -16,17 +16,17 @@ wget -O ../Models/tinyllama/stories15M.pt https://huggingface.co/karpathy/tinyll
 wget -O tok.bin https://github.com/karpathy/llama2.c/raw/master/tokenizer.bin
 ```
 
-The network must then be converted to f16 and serialized in a data format developed for those examples (simple and with buffer alignements):
+The network must then be converted to int8 / f32 mixed format and serialized in a data format developed for those examples (simple and with buffer alignments):
 
 ```shell
-python create.py
+python create.py -i8
 ```
 
-The file `net.bin` is generated. It can be loaded to memory.
+The file `net_int8.bin` is generated. It can be loaded to memory.
 
 This demo assumes the network is loaded at address `0x70000000` and the tokenizer at address `0x71D00000`.
 
-When running on AVH, the files (`net.bin` and `tok.bin`) are read and written to those addresses in semi-hosting mode.
+When running on AVH, the files (`net_int8.bin` and `tok.bin`) are read and written to those addresses in semi-hosting mode.
 
 When running on MPS3, the files must be loaded during boot sequence.
 
@@ -65,7 +65,9 @@ The `demo.cpp` is an adaptation from the original `run.cpp` of the `llama2.c` pr
 - Tensor and working memory is aligned
 - Some working buffers are placed into internal memory
 - chat mode removed
-- CMSIS-DSP f16 mode is used
+- CMSIS-DSP f32 mode is used for activations
+- Weights are in int8 and there is a mix int8 / f32 with some specific kernels
+- Loops have been unrolled (so code less readable)
 - The start seed is constant
 
 There may be some bugs that has been introduced by those changes.
