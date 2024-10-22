@@ -200,8 +200,15 @@ void add_char(const char txt)
 
 void sam_process()
 {
-  SetPitch(70); //59 70
-  SetSpeed(66);
+  //SetPitch(70); //59 70
+   SetPitch(59); 
+  //SetSpeed(66);
+   SetSpeed(78);
+
+   //SetPitch(82);
+   //SetSpeed(32);
+   //SetThroat(145);
+   //SetMouth(145);
 
   for(int i=0; myinput[i] != 0; i++)
   {
