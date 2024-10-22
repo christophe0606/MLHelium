@@ -39,12 +39,15 @@ layer:
     - component: ARM::Device:Native Driver:SysTimer
     - component: ARM::Device:Native Driver:Timeout
     - component: ARM::Device:Native Driver:UART
+    - component: ARM::CMSIS Driver:I2C
+    - component: ARM::Device:Native Driver:Audio I2S
+    - component: ARM::Device:Native Driver:I2C SBCon
 
 
   groups:
     - group: Board
       files:
-        - file: ./AVH_MPS3_Corstone_300.h
+        - file: ./MPS3_Corstone_300.h
         - file: ./main.h
         - file: ./main.c
 

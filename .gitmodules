@@ -1,0 +1,3 @@
+[submodule "SAM"]
+	path = SAM
+	url = git@github.com:christophe0606/SAM.git

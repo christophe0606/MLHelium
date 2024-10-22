@@ -13,6 +13,14 @@ project:
         - file: ../../Common/common.c
         - file: ../../Common/MPS3_ARM2D/GLCD_V2M-MPS3_AN552.c
         - file: ../../Common/MPS3_ARM2D/GLCD_Fonts.c
+        - file: audio_init.c
+        - file: mps3_audio_an547.c
+        - file: ../../SAM/src/debug.c             
+        - file: ../../SAM/src/render.c
+        - file: ../../SAM/src/sam.c
+        - file: ../../SAM/src/processframes.c
+        - file: ../../SAM/src/createtransitions.c 
+        - file: ../../SAM/src/reciter.c
       define:
       #  - WEIGHT_F8
          - WEIGHT_I8
@@ -21,6 +29,7 @@ project:
       - ./
       - ../../Common
       - ../../Common/MPS3_ARM2D
+      - ../../SAM/src
       - $DSPPP$
 
   layers:

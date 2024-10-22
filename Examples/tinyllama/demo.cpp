@@ -56,6 +56,7 @@ extern "C" {
 #if defined(MPS3)
     #include "disp_token.h"
     #include "Board_GLCD.h"
+    #include "audio_init.h"
 #endif
     extern void demo();
 }
@@ -838,6 +839,7 @@ void test_kernel()
 
 }
 
+#if 0
 void demo() {
 
     //test_kernel();
@@ -992,4 +994,27 @@ error:
       printf("An error occured %d. Allocated memory %u bytes (0x%X)\r\n",error,get_mem_usage(),get_mem_usage());
    }  
 }
+#endif 
 
+void demo() 
+{
+
+    SCB_EnableICache();
+    SCB_EnableDCache();
+
+#if defined(MPS3)
+    GLCD_Initialize();
+    //GLCD_WindowMax();
+    GLCD_SetBackgroundColor(LightGrey);
+    GLCD_SetForegroundColor(Black);
+    GLCD_SetTextBackgroundColor(LightGrey);
+    GLCD_SetTextForegroundColor(Black);
+    GLCD_ClearScreen();
+    GLCD_SetFontID(kFont16x24);
+#endif
+
+    printf("Start\r\n");
+    audio_init();
+    
+
+}

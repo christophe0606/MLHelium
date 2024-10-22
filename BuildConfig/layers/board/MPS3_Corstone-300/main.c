@@ -35,7 +35,8 @@ __WEAK int32_t shield_setup (void) {
 
 int main (void) {
 
-  
+  SystemCoreClockUpdate();
+
 #ifdef CMSIS_shield_header
   shield_setup();
 #endif

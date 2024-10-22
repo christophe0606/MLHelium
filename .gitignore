@@ -7,7 +7,6 @@ RTE/_*
 /*.sds
 /*.cbuild*.yml
 **.DS_Store
-RTE/
 *.cbuild*.yml
 cprj/
 *.dat
@@ -15,5 +14,6 @@ cprj/
 Common/MPS3
 net_f16.bin
 net_f8.bin
+*@*
 
 

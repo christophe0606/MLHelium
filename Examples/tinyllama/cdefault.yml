@@ -32,6 +32,7 @@ default:
         - -Wno-nan-infinity-disabled
         - -DARM_MATH_LOOPUNROLL
         - -Wno-unused-function
+        - -fsigned-char
       CPP:
         - -fno-rtti 
         - -fno-exceptions

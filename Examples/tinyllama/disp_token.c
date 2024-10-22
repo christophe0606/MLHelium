@@ -8,7 +8,7 @@ static int col = 0;
 
 
 
-void disp_token(const char *s)
+void disp_token(const unsigned char *s)
 {
   int maxh = (int)(GLCD_WIDTH / GLCD_FontWidth())-1;
   int maxv = (int)(GLCD_HEIGHT / GLCD_FontHeight())-1;

@@ -43,7 +43,7 @@ layer:
   groups:
     - group: Board
       files:
-        - file: ./AVH_MPS3_Corstone_300.h
+        - file: ./AVH_Corstone_300.h
         - file: ./main.h
         - file: ./main.c
 
