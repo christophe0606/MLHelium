@@ -41,6 +41,6 @@
 /* Heap and Stack sizes for secure and nonsecure applications */
 //#define HEAP_SIZE                 (0x05000000) /* 1 KiB */
 //#define HEAP_SIZE                 (0x01000000) /* 1 KiB */
-#define HEAP_SIZE                   (0x00500000) /* 1 KiB */
+#define HEAP_SIZE                   (0x00600000) /* 1 KiB */
 #define STACK_SIZE                  (0x00004000) /* 1 KiB */
 #endif /* __REGION_LIMITS_H__ */

@@ -16,12 +16,16 @@ extern "C"
 {
 #endif
 
-extern volatile uint16_t 
-audio_buffer_output[FIFO_SIZE];
+extern volatile uint16_t *audio_buffer_output;
 
 
 extern void audio_init();
 extern void audio_stop();
+
+extern void reset_text();
+extern void add_text(const char *txt);
+extern void add_char(const char c);
+extern void sam_process();
 
 
 #ifdef   __cplusplus

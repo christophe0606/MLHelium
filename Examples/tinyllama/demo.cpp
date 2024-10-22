@@ -839,7 +839,7 @@ void test_kernel()
 
 }
 
-#if 0
+
 void demo() {
 
     //test_kernel();
@@ -976,6 +976,11 @@ void demo() {
 
     printf("\r\nRunning ...\r\n\r\n");
 
+    audio_init();
+
+    reset_text();
+    
+
     error = generate(&transformer, &tokenizer, &sampler, prompt, steps);
     if (error != kNoError)
     {
@@ -994,8 +999,8 @@ error:
       printf("An error occured %d. Allocated memory %u bytes (0x%X)\r\n",error,get_mem_usage(),get_mem_usage());
    }  
 }
-#endif 
 
+#if 0
 void demo() 
 {
 
@@ -1015,6 +1020,11 @@ void demo()
 
     printf("Start\r\n");
     audio_init();
+
+    reset_text();
+    add_text("This is a test");
+    sam_process();
     
 
 }
+#endif

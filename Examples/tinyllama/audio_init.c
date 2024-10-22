@@ -20,9 +20,7 @@
 #include <ctype.h>
 
 
-__attribute__((section("dma")))                                                             
-__ALIGNED(16) volatile uint16_t 
-audio_buffer_output[FIFO_SIZE];
+volatile uint16_t *audio_buffer_output;
 
 volatile int readPos,writePos;
 
@@ -31,6 +29,11 @@ volatile static int32_t pos;
 volatile static int32_t speech_pos;
 static uint32_t phase;
 int debug;
+
+volatile int played=0;
+int input_len = 0;
+int start = 0;
+
 
 #define NBSIN 110
 static const int sinewave[NBSIN] = {      0.,   1886.,   3766.,   5634.,   7483.,   9307.,  11100.,
@@ -72,7 +75,7 @@ int16_t getSample()
    // Empty FIFO
    if ((readPos+1) > writePos)
    {
-     int16_t res = (int16_t)((float)rand() / (float)RAND_MAX * 0x800);
+     int16_t res = 0;
      return(res);
    }
    else
@@ -111,11 +114,18 @@ void gen_sin()
 void gen_sam()
 {
 
+   //if (!start)
+   //{
+   //   gen_noise();
+   //   return;
+   //}
    int8_t* src=(int8_t*)GetBuffer();
    int len = GetBufferLength();
    len /= 50;
    if (speech_pos+(BUF_SIZE>>1)>=len)
    {
+      start = 0;
+      played = 1;
       gen_noise();
       return;
    }
@@ -165,15 +175,37 @@ void I2S_Handler(void)
 
 unsigned char* myinput;
 
-void init_sam(char *str)
+void reset_text()
+{
+   memset(myinput,0,256);
+   input_len = 0;
+   //played = 0;
+   speech_pos = 0;
+   start = 0;
+}
+
+void add_text(const char *txt)
+{
+   strcat((char*)myinput,txt);
+   input_len += strlen(txt);
+}
+
+void add_char(const char txt)
+{
+   printf("%c",txt);
+   myinput[input_len] = txt;
+   myinput[input_len+1] = 0;
+   input_len ++;
+}
+
+void sam_process()
 {
   SetPitch(70); //59 70
   SetSpeed(66);
-  
-  memset(myinput,0,256);
-  for(int i=0; str[i] != 0; i++)
+
+  for(int i=0; myinput[i] != 0; i++)
   {
-      myinput[i] = (unsigned char)toupper((int)str[i]);
+      myinput[i] = (unsigned char)toupper((int)myinput[i]);
   }
  
   strcat((char*)myinput, "[");
@@ -181,9 +213,17 @@ void init_sam(char *str)
   if (err==1)
   {
       SetInput(myinput);
+      while(!played)
+         ;
+      played=0;
+      NVIC_DisableIRQ(I2S_IRQn);
       err=SAMMain();
+      start = 1;
+      NVIC_EnableIRQ(I2S_IRQn);
   }
 }
+
+
 
 void audio_init()
 {
@@ -193,14 +233,16 @@ void audio_init()
    writePos=0;
    pos=0;
    speech_pos=0;
+   played=1;
    //gen_sin();
+
+   audio_buffer_output = (volatile uint16_t*)malloc(FIFO_SIZE*2);
 
 
    SAMInit();
    myinput=(unsigned char*)malloc(256);
-
-   init_sam("This is a test");
-   gen_sam();
+   
+   gen_noise();
 
 
    mps3_audio_init(INPUT_SAMPLING_FREQ);
@@ -213,6 +255,7 @@ void audio_stop()
 
    mps3_audio_stop();
    free(myinput);
+   free((void*)audio_buffer_output);
 
 
 

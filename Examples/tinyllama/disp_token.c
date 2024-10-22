@@ -2,6 +2,7 @@
 
 #include "Board_GLCD.h"
 #include "GLCD_Config.h"
+#include "audio_init.h"
 
 static int ln = 0;
 static int col = 0;
@@ -18,6 +19,8 @@ void disp_token(const unsigned char *s)
     {
        ln++;
        s++;
+       sam_process();
+       reset_text();
     }
     else if (*s == '\r')
     {
@@ -38,7 +41,18 @@ void disp_token(const unsigned char *s)
        {
           GLCD_ClearScreen();
        }
+       add_char(*s);
+
+       if ((*s == '.') 
+           || (*s == '!')
+           || (*s == '?'))
+       {
+         sam_process();
+         reset_text();
+       }
+       
        GLCD_DisplayChar(ln,col++, *s++);
+
     }
     
     if (col == maxh)
