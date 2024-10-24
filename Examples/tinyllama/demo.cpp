@@ -62,8 +62,9 @@ extern "C" {
 }
 
 
-
-
+// Uncomment to display tok/s on LCD
+// tok/s always displayed on stdout (UART)
+//#define DISP_PERF_ON_LCD
 
 
 
@@ -184,7 +185,7 @@ char* decode(Tokenizer* t, int prev_token, int token) {
     return piece;
 }
 
-#if defined(MPS3)
+#if defined(MPS3) && defined(DISP_PERF_ON_LCD)
 static char msg[256];
 #endif
 
@@ -595,10 +596,10 @@ int generate(Transformer *transformer, Tokenizer *tokenizer, Sampler *sampler, c
         float end = time_in_ms();
         printf("\r\nduration: %f ms\n", (double)(end-start));
         printf("\r\nachieved tok/s: %f\n", (pos-1) / (double)(end-start)*1000);
-#if defined(MPS3)
-        sprintf(msg,"\r\n\nduration: %f ms\r\n", (double)(end-start));
+#if defined(MPS3) && defined(DISP_PERF_ON_LCD)
+        printf(msg,"\r\n\nduration: %f ms\r\n", (double)(end-start));
         disp_token(msg);
-        sprintf(msg,"achieved tok/s: %f\r\n", (pos-1) / (double)(end-start)*1000);
+        printf(msg,"achieved tok/s: %f\r\n", (pos-1) / (double)(end-start)*1000);
         disp_token(msg);
 #endif
 

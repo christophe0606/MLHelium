@@ -19,6 +19,7 @@
 #include <string.h>
 #include <ctype.h>
 
+#include "dsp/filtering_functions.h"
 
 volatile uint16_t *audio_buffer_output;
 
@@ -34,6 +35,12 @@ volatile int played=0;
 int input_len = 0;
 int start = 0;
 
+#define NBCOEFS 6
+static arm_fir_instance_q15 S;
+const q15_t coefs[8]={ 647,  4338, 11398, 11398,  4338,   647,0,0};
+ 
+static q15_t state[NBCOEFS+BUF_SIZE]={0};
+static q15_t tmp[BUF_SIZE];
 
 #define NBSIN 110
 static const int sinewave[NBSIN] = {      0.,   1886.,   3766.,   5634.,   7483.,   9307.,  11100.,
@@ -89,20 +96,31 @@ int16_t getSample()
 void gen_noise()
 {
 
-   volatile int16_t *src = pushBuffer(BUF_SIZE);
+   volatile int16_t *dst = pushBuffer(BUF_SIZE);
    for (int i = 0; i < BUF_SIZE; i++)
    {
-      src[i] = (int16_t)((float)rand() / (float)RAND_MAX * 0x800);
+      dst[i] = (int16_t)((float)rand() / (float)RAND_MAX * 0x800);
+   }
+
+}
+
+void gen_zero()
+{
+
+   volatile int16_t *dst = pushBuffer(BUF_SIZE);
+   for (int i = 0; i < BUF_SIZE; i++)
+   {
+      dst[i] = 0;
    }
 
 }
 
 void gen_sin()
 {
-   volatile int16_t *src = pushBuffer(BUF_SIZE);
+   volatile int16_t *dst = pushBuffer(BUF_SIZE);
    for(int i = 0; i < BUF_SIZE; i++)
    {
-         src[i] = sinewave[phase];
+         dst[i] = sinewave[phase];
          phase++;
          if (phase == NBSIN)
          {
@@ -119,14 +137,18 @@ void gen_sam()
    //   gen_noise();
    //   return;
    //}
-   int8_t* src=(int8_t*)GetBuffer();
+   // SAM buffer contains unsigned data but its type is signed.
+   // We need to cast to unsigned here otherwise the
+   // conversion to int16_t below will sign extend the value and the
+   // sound will be corrupted.
+   uint8_t* src=(uint8_t*)GetBuffer();
    int len = GetBufferLength();
    len /= 50;
    if (speech_pos+(BUF_SIZE>>1)>=len)
    {
       start = 0;
       played = 1;
-      gen_noise();
+      gen_zero();
       return;
    }
 
@@ -135,9 +157,18 @@ void gen_sam()
 
    for(int i = 0; i < (BUF_SIZE>>1); i++)
    {
-      dst[2*i] = src[i+speech_pos]<<7;
-      dst[2*i+1] = src[i+speech_pos]<<7;
+      // Upsampling. SAM is working at 22050 Hz 
+      // After upsampling we are are 44100 Hz
+      // and by tuning the SAM pitch we can adapt for the
+      // 48 kHz of the MPS3
+      // Going directly from 22 kHz to 48 kHz with a resampler
+      // would consume too many cycles (we have a LLM to run too !)
+      tmp[2*i] = src[i+speech_pos]<<7;
+      tmp[2*i+1] = 0;
    }
+   // Low pass filter for upsampling.
+   // It is a very simple one with low attenuation
+   arm_fir_q15(&S,tmp,(q15_t*)dst,BUF_SIZE);
    speech_pos += (BUF_SIZE>>1);
 }
 
@@ -192,7 +223,7 @@ void add_text(const char *txt)
 
 void add_char(const char txt)
 {
-   printf("%c",txt);
+   //printf("%c",txt);
    myinput[input_len] = txt;
    myinput[input_len+1] = 0;
    input_len ++;
@@ -200,15 +231,7 @@ void add_char(const char txt)
 
 void sam_process()
 {
-  //SetPitch(70); //59 70
-   SetPitch(59); 
-  //SetSpeed(66);
-   SetSpeed(78);
-
-   //SetPitch(82);
-   //SetSpeed(32);
-   //SetThroat(145);
-   //SetMouth(145);
+   SetPitch(54);
 
   for(int i=0; myinput[i] != 0; i++)
   {
@@ -244,15 +267,25 @@ void audio_init()
    //gen_sin();
 
    audio_buffer_output = (volatile uint16_t*)malloc(FIFO_SIZE*2);
-
-
-   SAMInit();
    myinput=(unsigned char*)malloc(256);
+
+   arm_status status = arm_fir_init_q15(&S,NBCOEFS,coefs,state,BUF_SIZE);
+   if (status != ARM_MATH_SUCCESS)
+   {
+      printf("Error initializing the upsampling filter\r\n");
+      myinput = NULL;
+   }
+   else
+   {
+
+
+      SAMInit();
    
-   gen_noise();
+      gen_noise();
 
 
-   mps3_audio_init(INPUT_SAMPLING_FREQ);
+      mps3_audio_init(INPUT_SAMPLING_FREQ);
+   }
  
 }
 
@@ -263,7 +296,4 @@ void audio_stop()
    mps3_audio_stop();
    free(myinput);
    free((void*)audio_buffer_output);
-
-
-
 }
