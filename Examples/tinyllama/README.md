@@ -52,6 +52,8 @@ IMAGE2FILE: \SOFTWARE\tok.bin      ;Tokenizer
 
 ```
 
+The example was tested on an AN552 image with a Cortex-M55 at 50 MHz (so the default clock must be changed in MPS3 configuration files).
+
 Building is relying on CMSIS build tools.
 
 # Changes
