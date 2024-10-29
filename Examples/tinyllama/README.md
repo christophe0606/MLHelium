@@ -2,7 +2,9 @@
 
 # How to install / build / run
 
-It is an adaptation of the project `llama2.c` by Andrej Karpathy
+This project is using a github submodule for speech synthesis. So, when cloning this repo you must also clone the submodules.
+
+This project is an adaptation of the project `llama2.c` by Andrej Karpathy
 
 https://github.com/karpathy/llama2.c/tree/master
 
